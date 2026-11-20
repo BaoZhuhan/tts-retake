@@ -1,0 +1,83 @@
+# tts-retake
+
+Quality-gated two-speaker dialogue synthesis with [MOSS-TTSD](https://github.com/OpenMOSS/MOSS-TTSD). Long dialogues are synthesized in chunks;
+every chunk is checked automatically, and only the chunks that fail are synthesized again.
+
+- **Checks**: Whisper word alignment (missing or added words, dropped opening or ending, reference text read aloud), speaking rate,
+  sustained tones, long silences, and ECAPA speaker similarity for swapped or drifting voices.
+- **Repair**: a failed chunk is retaken up to 6 times and split in two after 2 retakes; a suspect chunk gets one more take that is kept only
+  if it passes; chunks that never pass are listed for human review.
+- **Scheduler**: a small HTTP daemon hands out work, so workers on any machine claim tasks without shared-file locks. The pool grows and
+  shrinks with the remaining work and the measured speed of each task.
+- **Anywhere**: one machine with GPUs, a SLURM cluster, or workers started by hand. Where to run is one TOML file.
+
+English only for now.
+
+## Install
+
+```bash
+git clone https://github.com/BaoZhuhan/tts-retake && cd tts-retake
+pip install -e .
+```
+
+The controller needs Python 3.11 and nothing else. Synthesis needs an environment with MOSS-TTSD and the `clis/` folder of the
+[MOSS-TTS repository](https://github.com/OpenMOSS/MOSS-TTS); checks need `openai-whisper`, `speechbrain` and `librosa`. Each can live in its own
+environment; the cluster file says which Python runs which step.
+
+## Input
+
+One dialogue per line of a JSONL file. Voice paths are relative to the file; `text` is the sentence spoken in the reference clip.
+
+```json
+{"id": "visit-001", "priority": 0,
+ "speakers": {"doctor": {"voice": "voices/doctor.wav", "text": "Good morning, how can I help you today?"},
+              "patient": {"voice": "voices/patient.wav", "text": "I have been having pain in my knee."}},
+ "turns": [{"speaker": "doctor", "text": "Come on in, have a seat."},
+           {"speaker": "patient", "text": "Thanks. It's my knee again.", "pause": 1.2}]}
+```
+
+`pause` (seconds after a turn) is optional. Higher `priority` dialogues go first.
+
+## Run
+
+```bash
+cp configs/job.example.toml job.toml
+cp configs/clusters/slurm.toml my-cluster.toml
+tts-retake check-config job.toml --cluster my-cluster.toml
+tts-retake run job.toml --cluster my-cluster.toml --limit 1
+tts-retake run job.toml --cluster my-cluster.toml
+tts-retake status job.toml
+```
+
+`check-config` validates the input, imports each Python environment and, on SLURM, prints the job scripts and tests them with
+`sbatch --test-only`. Run the controller where it can stay up for the whole job (a `tmux` session, or a small SLURM job).
+
+Results go to `output/<id>/dialogue.wav`, with `output/report.jsonl` listing every dialogue, its retakes and any chunk left for review.
+A run can be stopped and started again; it continues from the files on disk.
+
+## Where to run
+
+| Cluster file | For |
+|---|---|
+| `configs/clusters/local.toml` | a workstation or bare-metal server: one worker per GPU plus CPU check workers |
+| `configs/clusters/slurm.toml` | a SLURM cluster: account, partitions, job sizes, limits on jobs, CPUs and memory |
+
+With `backend = "manual"`, start workers yourself on any machine that can reach the controller:
+
+```bash
+tts-retake worker --url http://controller-host:PORT --token TOKEN --kind gpu
+```
+
+The URL and token are in `output/.run/daemon.json`.
+
+All settings and their defaults are in [`src/tts_retake/config.py`](src/tts_retake/config.py). The defaults come from synthesizing and
+repairing 1,410 English clinical dialogues (about 11,000 chunks) for the SIMAX dataset.
+
+## Agent skill
+
+[`.claude/skills/tts-retake/SKILL.md`](.claude/skills/tts-retake/SKILL.md) lets a coding agent such as Claude Code inspect the machine
+or cluster it runs on, write the cluster file, validate it and start a job.
+
+## License
+
+MIT

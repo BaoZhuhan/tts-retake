@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tts-retake"
+version = "0.1.0"
+description = "Quality-gated two-speaker dialogue synthesis with MOSS-TTSD: check every chunk, retake only the ones that fail"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+synth = ["torch", "torchaudio", "transformers", "soundfile", "numpy"]
+check = ["torch", "openai-whisper", "speechbrain", "librosa", "soundfile", "numpy"]
+
+[project.scripts]
+tts-retake = "tts_retake.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

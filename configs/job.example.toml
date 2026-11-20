@@ -1,0 +1,5 @@
+# Job: what to synthesize. Every other setting has a default (src/tts_retake/config.py).
+
+[job]
+input = "dialogues.jsonl"
+output = "out"

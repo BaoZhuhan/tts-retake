@@ -1,0 +1,34 @@
+# A SLURM cluster: GPU jobs synthesize, CPU jobs check; edit account, partitions, limits and paths for your site.
+
+[scheduler]
+backend = "slurm"
+target_minutes = 60
+
+[synth]
+moss_cli_dir = "/path/to/MOSS-TTS/clis"
+
+[worker]
+python = "/path/to/python3.11"
+
+[engines.synth]
+python = "/path/to/moss-tts-env/bin/python"
+env = { HF_HOME = "/path/to/hf-cache", HF_HUB_OFFLINE = "1" }
+
+[engines.check]
+python = "/path/to/check-env/bin/python"
+
+[slurm]
+job_name = "tts-retake"
+setup = ["umask 002"]
+max_cpus = 300
+max_mem_gb = 1200
+
+[slurm.gpu]
+max_jobs = 14
+max_pending = 8
+options = { account = "your-account", partition = "gpu", gres = "gpu:1", cpus-per-task = 4, mem = "48G", time = "24:00:00" }
+
+[slurm.cpu]
+max_jobs = 8
+max_pending = 4
+options = { account = "your-account", partition = "cpu", cpus-per-task = 4, mem = "16G", time = "12:00:00" }

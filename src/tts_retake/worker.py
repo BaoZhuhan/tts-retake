@@ -1,0 +1,115 @@
+"""Worker: claims tasks from the daemon, runs them in engine processes that keep their models loaded, and reports back."""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from pathlib import Path
+
+from .daemon import call
+
+SRC = str(Path(__file__).resolve().parents[1])
+
+
+def gpu_memory_gb():
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=60).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return float(out[0]) / 1024 if out else None
+
+
+def with_src(env):
+    return {**env, "PYTHONPATH": os.pathsep.join(p for p in (SRC, env.get("PYTHONPATH", "")) if p)}
+
+
+class Engine:
+    def __init__(self, spec, cfg, device):
+        env = with_src({**os.environ, **spec["env"], "TTS_RETAKE_CONFIG": json.dumps(cfg), "TTS_RETAKE_DEVICE": device})
+        self.proc = subprocess.Popen([spec["python"], "-m", "tts_retake.engine"], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, text=True, env=env)
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def run(self, kind, folder) -> dict:
+        self.proc.stdin.write(json.dumps({"type": kind, "folder": folder}) + "\n")
+        self.proc.stdin.flush()
+        line = self.proc.stdout.readline()
+        if not line:
+            raise RuntimeError(f"{kind} engine exited with code {self.proc.wait()}")
+        return json.loads(line)
+
+    def close(self):
+        if self.alive():
+            self.proc.stdin.close()
+            try:
+                self.proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
+class Worker:
+    def __init__(self, info, kind):
+        self.info, self.cfg = info, call(info, "/config")
+        memory = gpu_memory_gb() if kind == "gpu" else None
+        self.kind = "cpu" if memory is not None and memory < self.cfg["scheduler"]["min_gpu_gb"] else kind
+        self.id = f"{socket.gethostname().split('.')[0]}-{os.getpid()}-{uuid.uuid4().hex[:4]}"
+        self.engines, self.task = {}, None
+
+    def engine(self, kind) -> Engine:
+        spec = self.cfg["engines"][kind]
+        key = (spec["python"], json.dumps(spec["env"], sort_keys=True))
+        if key not in self.engines or not self.engines[key].alive():
+            self.engines[key] = Engine(spec, self.cfg, "cuda" if self.kind == "gpu" else "cpu")
+        return self.engines[key]
+
+    def heartbeat(self):
+        while True:
+            time.sleep(30)
+            try:
+                call(self.info, "/beat", {"worker": self.id, "dialogue": self.task})
+            except OSError:
+                pass
+
+    def loop(self):
+        threading.Thread(target=self.heartbeat, daemon=True).start()
+        last_work, misses = time.time(), 0
+        me = {"id": self.id, "kind": self.kind, "host": socket.gethostname(), "job": os.environ.get("SLURM_JOB_ID", "")}
+        while time.time() - last_work < 60 * self.cfg["scheduler"]["idle_minutes"] and misses < 40:
+            try:
+                reply = call(self.info, "/claim", {"worker": me})
+                misses = 0
+            except OSError:
+                misses += 1
+                time.sleep(15)
+                continue
+            if reply.get("stop"):
+                break
+            if "task" not in reply:
+                time.sleep(reply["wait"])
+                continue
+            task = reply["task"]
+            self.task = task["dialogue"]
+            try:
+                result = self.engine(task["type"]).run(task["type"], str(Path(self.cfg["job"]["output"]) / task["dialogue"]))
+            except Exception as e:
+                result = {"ok": False, "error": repr(e)[-3000:]}
+            self.task, last_work = None, time.time()
+            try:
+                call(self.info, "/done", {"worker": self.id, "dialogue": task["dialogue"], "result": result})
+            except OSError:
+                pass
+        for e in self.engines.values():
+            e.close()
+
+
+def main(info, kind):
+    Worker(info, kind).loop()
+    sys.exit(0)

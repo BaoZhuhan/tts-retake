@@ -1,0 +1,17 @@
+# One machine with NVIDIA GPUs (workstation or bare-metal server): one worker per GPU plus CPU check workers.
+
+[scheduler]
+backend = "local"
+
+[local]
+gpus = "auto"
+cpu_workers = 2
+
+[synth]
+moss_cli_dir = "/path/to/MOSS-TTS/clis"
+
+[engines.synth]
+python = "/path/to/moss-tts-env/bin/python"
+
+[engines.check]
+python = "/path/to/check-env/bin/python"
