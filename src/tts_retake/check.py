@@ -11,7 +11,7 @@ import numpy as np
 from .dialogue import Folder, read_json, write_json
 from .language import is_cjk, tokens, wpm
 
-VERSION = 2  # bump when chunk metrics change, so cached check.json files are recomputed
+VERSION = 2
 
 def f0_of(y):
     import librosa
