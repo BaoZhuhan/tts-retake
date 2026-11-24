@@ -11,6 +11,8 @@ import numpy as np
 from .dialogue import Folder, read_json, write_json
 from .language import is_cjk, tokens, wpm
 
+VERSION = 2  # bump when chunk metrics change, so cached check.json files are recomputed
+
 def f0_of(y):
     import librosa
 
@@ -281,7 +283,7 @@ class Checker:
                    "opening_dropped": bool(spoken) and all(r["found"] < 0.3 for r in spoken[:2]),
                    "ending_dropped": bool(spoken) and all(r["found"] < 0.3 for r in spoken[-2:])}
         np.save(f.chunk(k, "emb.npy"), np.array(embeddings) if embeddings else np.zeros((0, 192), dtype=np.float32))
-        write_json(f.chunk(k, "check.json"), {"sig": f.sig(k), "turns_range": [lo, hi], "metrics": metrics, "turns": rows})
+        write_json(f.chunk(k, "check.json"), {"sig": f.sig(k), "version": VERSION, "turns_range": [lo, hi], "metrics": metrics, "turns": rows})
 
     def run(self, folder) -> dict:
         f = Folder(folder)
@@ -291,7 +293,7 @@ class Checker:
         checked = 0
         for k in range(n):
             q = read_json(f.chunk(k, "check.json"))
-            if not (q and q["sig"] == f.sig(k) and q["turns_range"] == plan["chunks"][k]):
+            if not (q and q["sig"] == f.sig(k) and q.get("version") == VERSION and q["turns_range"] == plan["chunks"][k]):
                 self.check_chunk(f, plan, k)
                 checked += 1
         checks = [read_json(f.chunk(k, "check.json")) for k in range(n)]
