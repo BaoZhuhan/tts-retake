@@ -41,13 +41,27 @@ def centroid(vectors, fallback):
 
 
 def longest_run(flags):
-    run, best = [], []
-    for f in flags + [None]:
-        if f is not None and f["swap"]:
-            run.append(f)
-        else:
-            best, run = max(best, run, key=len), []
+    best = []
+    for s in {f["speaker"] for f in flags}:
+        run = []
+        for f in [f for f in flags if f["speaker"] == s] + [None]:
+            if f is not None and f["swap"]:
+                run.append(f)
+            else:
+                best, run = max(best, run, key=len), []
     return best
+
+
+def voice_change(flags, others, th):
+    out = []
+    for s in {f["speaker"] for f in flags}:
+        here = [f for f in flags if f["speaker"] == s and f["seconds"] >= th["change_min_s"] and not f["swap"]]
+        there = [f["own_ref"] for f in others if f["speaker"] == s and f["seconds"] >= th["change_min_s"]]
+        if len(here) >= 2 and len(there) >= 3:
+            m = float(np.median([f["own_ref"] for f in here]))
+            if m < th["drift_reference"] and float(np.median(there)) - m >= th["change_drop"]:
+                out += [f for f in here if f["own_ref"] < th["drift_reference"]]
+    return out
 
 
 def judge(plan, checks, embeddings, refs, th) -> dict:
@@ -58,7 +72,7 @@ def judge(plan, checks, embeddings, refs, th) -> dict:
     gender = {s: ("male" if f0[s] < 165 else "female") if f0[s] else None for s in (a, b)}
     cen = {s: centroid([embeddings[k][t["ei"]] for k, q in enumerate(checks) for t in q["turns"] if "ei" in t and t["speaker"] == s], refs[s][0])
            for s in (a, b)}
-    chunks = []
+    chunks, allflags = [], []
     for k, q in enumerate(checks):
         m, fail, suspect = q["metrics"], [], []
         for name, value in (("missing", m["missing"]), ("added", m["added"])):
@@ -86,13 +100,15 @@ def judge(plan, checks, embeddings, refs, th) -> dict:
             g, p = gender[own], t.get("f0")
             wrong_pitch = p is not None and g is not None and (p < th["female_f0_min"] if g == "female" else p > th["male_f0_max"])
             swap = xc > oc + th["swap_margin"] and xrf > orf
-            flags.append({"turn": t["turn"], "seconds": round(t["e"] - t["s"], 1), "own": round(oc, 3), "other": round(xc, 3),
+            flags.append({"turn": t["turn"], "speaker": own, "seconds": round(t["e"] - t["s"], 1), "own": round(oc, 3), "other": round(xc, 3),
                           "own_ref": round(orf, 3), "other_ref": round(xrf, 3), "f0": p, "swap": swap, "wrong_pitch": wrong_pitch,
                           "drift": oc < th["drift_own"] and orf < th["drift_reference"] and not swap})
+        allflags.append(flags)
         run = longest_run(flags)
-        if len(run) >= (th["swap_run_cross_gender"] if cross else th["swap_run_same_gender"]):
+        sure = len(run) >= 2 and np.median([f["other_ref"] - f["own_ref"] for f in run]) >= th["swap_ref_margin"]
+        if sure or len(run) >= (th["swap_run_cross_gender"] if cross else th["swap_run_same_gender"]):
             agree = sum(f["wrong_pitch"] for f in run) >= len(run) / 2
-            (fail if agree or not cross else suspect).append(f"voice swap turns {run[0]['turn']}-{run[-1]['turn']}")
+            (fail if agree or sure or not cross else suspect).append(f"voice swap turns {run[0]['turn']}-{run[-1]['turn']}")
         elif len(run) >= 2:
             suspect.append(f"swap-like turns {run[0]['turn']}-{run[-1]['turn']}")
         drift = [f for f in flags if f["drift"]]
@@ -101,8 +117,12 @@ def judge(plan, checks, embeddings, refs, th) -> dict:
             fail.append("voice drift turns " + ",".join(str(f["turn"]) for f in hard[:6]))
         elif drift:
             suspect.append("possible drift turns " + ",".join(str(f["turn"]) for f in drift[:6]))
-        chunks.append({"k": k, "turns": plan["chunks"][k], "status": "fail" if fail else "suspect" if suspect else "pass",
-                       "fail": fail, "suspect": suspect, "speaker": flags})
+        chunks.append({"k": k, "turns": plan["chunks"][k], "fail": fail, "suspect": suspect, "speaker": flags})
+    for k, c in enumerate(chunks):
+        changed = voice_change(allflags[k], [f for j, fl in enumerate(allflags) if j != k for f in fl], th)
+        if changed:
+            c["fail"].append("voice change turns " + ",".join(str(f["turn"]) for f in changed[:6]))
+        c["status"] = "fail" if c["fail"] else "suspect" if c["suspect"] else "pass"
     return {"cross_gender": cross, "chunks": chunks}
 
 
@@ -121,7 +141,11 @@ class Parakeet:
     def __init__(self, name, device):
         import nemo.collections.asr as nemo_asr
 
-        self.model = nemo_asr.models.ASRModel.from_pretrained(name, map_location=device).eval()
+        path = name
+        if not os.path.exists(path):
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(name, name.split("/")[-1] + ".nemo")
+        self.model = nemo_asr.models.ASRModel.restore_from(path, map_location=device).eval()
 
     def words(self, y16):
         out = self.model.transcribe([np.ascontiguousarray(y16, dtype=np.float32)], timestamps=True, batch_size=1, verbose=False)
@@ -144,8 +168,9 @@ class Checker:
             self.device = "cpu"
         self.cache = Path(cfg["job"]["output"]) / ".cache"
         self.asr = asr_model(self.cfg["asr"], self.device)
-        self.encoder = EncoderClassifier.from_hparams(source=self.cfg["speaker_model"], savedir=str(self.cache / "speaker_model"),
-                                                      run_opts={"device": self.device})
+        src = self.cfg["speaker_model"]
+        self.encoder = EncoderClassifier.from_hparams(source=src, savedir=str(self.cache / "speaker_model"), run_opts={"device": self.device},
+                                                      overrides={"pretrained_path": src} if os.path.isdir(src) else {})
 
     def embed(self, y):
         with self.torch.no_grad():

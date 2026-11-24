@@ -16,7 +16,7 @@ KINDS = {"drop_middle": "fail", "drop_opening": "fail", "drop_ending": "fail", "
          "fast": "fail", "slow": "fail", "silence": "flag", "tone": "fail"}
 REASONS = {"missing words": "missing", "added words": "added", "opening dropped": "opening", "ending dropped": "ending",
            "reference text spoken": "leak", "speaking rate": "rate", "sustained tone": "tone", "silence": "silence",
-           "voice swap": "swap", "swap-like": "swap", "voice drift": "drift", "possible drift": "drift"}
+           "voice swap": "swap", "swap-like": "swap", "voice drift": "drift", "possible drift": "drift", "voice change": "drift"}
 RIGHT = {"drop_middle": {"missing"}, "drop_opening": {"opening", "missing"}, "drop_ending": {"ending", "missing"},
          "insert_speech": {"added"}, "leak": {"leak", "trimmed"}, "fast": {"rate"}, "slow": {"rate"}, "silence": {"silence"},
          "tone": {"tone"}, "third_voice": {"drift", "swap"}, "swap": {"swap"}}

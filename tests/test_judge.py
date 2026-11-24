@@ -34,6 +34,17 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(self.decide(swapped=range(5, 10))["status"], "fail")
         self.assertEqual(self.decide(swapped=[7])["status"], "pass")
 
+    def test_one_voice_for_both_speakers(self):
+        self.assertEqual(self.decide(swapped=[11, 13, 15])["status"], "fail")
+
+    def test_third_voice_in_one_chunk(self):
+        rows, emb = turns()
+        emb[[8, 10, 12]] = np.eye(4)[2]
+        plan = {"order": ["a", "b"], "chunks": [[0, 7], [7, 14], [14, 20]]}
+        checks = [{"metrics": METRICS, "turns": [r for r in rows if lo <= r["turn"] < hi]} for lo, hi in plan["chunks"]]
+        out = judge(plan, checks, [emb] * 3, {"a": (A, 120.0), "b": (B, 125.0)}, DEFAULTS["check"])["chunks"]
+        self.assertEqual([c["status"] for c in out], ["pass", "fail", "pass"])
+        self.assertIn("voice change", out[1]["fail"][0])
 
 if __name__ == "__main__":
     unittest.main()
