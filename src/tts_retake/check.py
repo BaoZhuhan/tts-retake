@@ -213,7 +213,13 @@ class Checker:
         turns, lang = plan["turns"], plan.get("language", "en")
         y, sr, y16 = self.load16k(f.chunk(k))
         hyp, times = [], []
+        words = []
         for w, s, e in self.transcribe(f, k, y16, lang):
+            if words and w[:1] in "'’-":
+                words[-1] = [words[-1][0] + w, words[-1][1], e]
+            else:
+                words.append([w, s, e])
+        for w, s, e in words:
             for t in tokens(w):
                 hyp.append(t)
                 times.append((s, e))

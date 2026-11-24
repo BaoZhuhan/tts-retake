@@ -1,6 +1,7 @@
 # tts-retake
 
-Quality-gated two-speaker dialogue synthesis with [MOSS-TTSD](https://github.com/OpenMOSS/MOSS-TTSD). Long dialogues are synthesized in chunks;
+Quality-gated two-speaker dialogue synthesis with [MOSS-TTSD](https://github.com/OpenMOSS/MOSS-TTSD) 1.0 or
+[MOSS-TTS](https://github.com/OpenMOSS/MOSS-TTS) 1.5. Long dialogues are synthesized in chunks;
 every chunk is checked automatically, and only the chunks that fail are synthesized again.
 
 - **Checks**: Whisper or Parakeet word alignment (missing or added words, dropped opening or ending, reference text read aloud), speaking rate,
@@ -11,7 +12,12 @@ every chunk is checked automatically, and only the chunks that fail are synthesi
   shrinks with the remaining work and the measured speed of each task.
 - **Anywhere**: one machine with GPUs, a SLURM cluster, or workers started by hand. Where to run is one TOML file.
 
-English only for now.
+English, Chinese, French, Spanish and German.
+
+| Engine | `[synth]` in the job file |
+|---|---|
+| MOSS-TTSD 1.0 (default): each chunk is generated as one two-speaker passage | nothing to set |
+| MOSS-TTS 1.5: each turn is cloned from its own speaker, a chunk's turns are generated as one batch | `class = "tts_retake.synth_tts:SynthTTS"`, `model = "OpenMOSS-Team/MOSS-TTS-v1.5"` |
 
 ## Install
 
@@ -29,14 +35,15 @@ environment; the cluster file says which Python runs which step.
 One dialogue per line of a JSONL file. Voice paths are relative to the file; `text` is the sentence spoken in the reference clip.
 
 ```json
-{"id": "visit-001", "priority": 0,
+{"id": "visit-001", "priority": 0, "language": "en",
  "speakers": {"doctor": {"voice": "voices/doctor.wav", "text": "Good morning, how can I help you today?"},
               "patient": {"voice": "voices/patient.wav", "text": "I have been having pain in my knee."}},
  "turns": [{"speaker": "doctor", "text": "Come on in, have a seat."},
            {"speaker": "patient", "text": "Thanks. It's my knee again.", "pause": 1.2}]}
 ```
 
-`pause` (seconds after a turn) is optional. Higher `priority` dialogues go first.
+`pause` (seconds after a turn) is optional. Higher `priority` dialogues go first. `language` is `en` (default), `zh`, `fr`, `es`
+or `de`; English is checked with `check.asr`, other languages with `check.asr_multilingual` (Whisper large-v3).
 
 ## Run
 
