@@ -18,7 +18,7 @@ class Board:
         self.lease = 60 * cfg["scheduler"]["lease_minutes"]
         self.wait = min(10, cfg["scheduler"]["interval_seconds"])
         self.lock = threading.Lock()
-        self.tasks, self.workers, self.results = {}, {}, []
+        self.tasks, self.workers, self.results, self.failed = {}, {}, [], {}
         self.speed = dict(cfg["scheduler"]["estimates"])
         self.stopping = False
 
@@ -40,7 +40,10 @@ class Board:
                 self.workers.pop(worker["id"], None)
                 return {"stop": True}
             types = ["synth", "check"] if worker["kind"] == "gpu" else ["check"]
-            free = [t for t in self.tasks.values() if t["worker"] is None and t["type"] in types]
+            live = {k: {w for w, v in self.workers.items() if now - v["seen"] < self.lease and (k == "check" or v["kind"] == "gpu")}
+                    for k in types}
+            free = [t for t in self.tasks.values() if t["worker"] is None and t["type"] in types
+                    and not (worker["id"] in self.failed.get(t["dialogue"], ()) and live[t["type"]] - self.failed[t["dialogue"]])]
             if not free:
                 return {"wait": self.wait}
             t = min(free, key=lambda t: (types.index(t["type"]), -t["priority"], t["queued"]))
@@ -67,6 +70,8 @@ class Board:
             w.update(task=None, done=w.get("done", 0) + 1)
             seconds = time.time() - t["started"]
             name = "synth" if t["type"] == "synth" else f"check_{w.get('kind', 'cpu')}"
+            if not result.get("ok"):
+                self.failed.setdefault(dialogue, set()).add(worker)
             if result.get("ok"):
                 self.speed[name] = round(0.7 * self.speed[name] + 0.3 * seconds, 1)
             self.results.append({**result, "dialogue": dialogue, "type": t["type"], "seconds": round(seconds, 1), "worker": worker,
