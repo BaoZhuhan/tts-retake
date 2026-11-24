@@ -106,6 +106,21 @@ class AccountTest(unittest.TestCase):
                 c.daemon.close()
 
 
+class DemandTest(unittest.TestCase):
+    def test_checks_spill_to_gpus_when_cpu_jobs_are_capped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Controller(job(tmp, 'backend = "slurm"\ntarget_minutes = 60'))
+            try:
+                for i in range(10):
+                    c.board.put(f"x{i}", "check", 0)
+                self.assertEqual(c.demand(), {"gpu": 0, "cpu": 1})
+                for i in range(10, 400):
+                    c.board.put(f"x{i}", "check", 0)
+                self.assertEqual(c.demand(), {"gpu": 6, "cpu": 4})
+            finally:
+                c.daemon.close()
+
+
 class SlurmTest(unittest.TestCase):
     def test_sacct_states(self):
         with tempfile.TemporaryDirectory() as tmp:

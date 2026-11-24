@@ -93,6 +93,20 @@ def check_config(a):
     return 1 if problems else 0
 
 
+def bench(a):
+    from . import bench as b
+
+    if a.action == "build":
+        print(json.dumps(b.build(a.paths[0], a.paths[1], a.per_kind, a.clean, a.seed, a.kinds.split(",") if a.kinds else None)))
+    elif a.action == "prepare":
+        job = b.prepare(a.paths[0], a.paths[1])
+        print(f"run the checks with: tts-retake run {job} --cluster <cluster file>")
+    else:
+        b.score(a.paths[0])
+        print((Path(a.paths[0]) / "bench_report.md").read_text(), end="")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="tts-retake", description="Quality-gated two-speaker dialogue synthesis with MOSS-TTSD.")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -114,5 +128,13 @@ def main(argv=None):
     p.add_argument("job")
     p.add_argument("--cluster")
     p.set_defaults(fn=check_config)
+    p = sub.add_parser("bench", help="benchmark the checks: build items with known defects, prepare a check-only run, score it")
+    p.add_argument("action", choices=["build", "prepare", "score"])
+    p.add_argument("paths", nargs="+", help="build SOURCE OUT | prepare BENCH RUN | score RUN")
+    p.add_argument("--per-kind", type=int, default=30)
+    p.add_argument("--clean", type=int, default=60)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--kinds", default="", help="comma-separated defect kinds (default: all)")
+    p.set_defaults(fn=bench)
     a = ap.parse_args(argv)
     return a.fn(a)

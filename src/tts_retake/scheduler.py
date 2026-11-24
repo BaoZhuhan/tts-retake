@@ -95,8 +95,12 @@ class Controller:
         gpu = min(synth + (0 if cpu_possible else check), math.ceil(gpu_seconds / horizon) if gpu_seconds else 0)
         idle_gpus = sum(w["kind"] == "gpu" and not w.get("task") for w in snap["workers"].values())
         spare = max(0, snap["queued"]["check"] - idle_gpus)
-        cpu = min(spare, math.ceil(spare * est["check_cpu"] / horizon)) if cpu_possible and spare else 0
-        return {"gpu": max(gpu, 1 if synth else 0), "cpu": max(cpu, 1 if spare and cpu_possible else 0)}
+        cap = {"slurm": self.cfg["slurm"]["cpu"]["max_jobs"], "local": self.cfg["local"]["cpu_workers"]}.get(self.cfg["scheduler"]["backend"], spare)
+        cpu = min(spare, math.ceil(spare * est["check_cpu"] / horizon), cap) if cpu_possible and spare else 0
+        cpu = max(cpu, 1 if spare and cpu_possible else 0)
+        uncovered = max(0.0, spare - cpu * horizon / est["check_cpu"]) if cpu_possible else 0.0
+        gpu += min(math.ceil(uncovered), math.ceil(uncovered * est["check_gpu"] / horizon)) if uncovered else 0
+        return {"gpu": max(gpu, 1 if synth else 0), "cpu": cpu}
 
     def log(self, name, entry):
         with open(self.run / name, "a") as log:

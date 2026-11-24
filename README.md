@@ -78,6 +78,24 @@ environment is probably broken.
 All settings and their defaults are in [`src/tts_retake/config.py`](src/tts_retake/config.py). The defaults come from synthesizing and
 repairing 1,410 English clinical dialogues (about 11,000 chunks) for the SIMAX dataset.
 
+## Benchmark the checks
+
+To measure how well the checks separate good chunks from bad ones, start from dialogue folders whose chunks you trust (each with
+`plan.json`, `chunk_NNN.wav` and a `spans.json` giving every turn's start and end in its chunk) and cut known defects into them:
+
+```bash
+tts-retake bench build trusted/ bench/ --per-kind 30 --clean 60
+tts-retake bench prepare bench/ runs/whisper-small
+tts-retake run runs/whisper-small/job.toml --cluster my-cluster.toml
+tts-retake bench score runs/whisper-small
+```
+
+`build` keeps some folders unchanged and, in the middle chunk of others, removes turns from the middle, the opening or the ending,
+inserts speech from another dialogue, prepends a speaker's reference clip, speeds speech up or slows it down, or inserts a long silence
+or a sustained tone. Folders that already carry a `label.json` with a defect (for example a chunk spoken in a third voice) are copied
+as they are. `prepare` writes a check-only job (nothing is retaken), and `score` reports, for each kind of defect, how often the checks
+flag it and for the right reason, and how often clean chunks are flagged.
+
 ## Agent skill
 
 [`.claude/skills/tts-retake/SKILL.md`](.claude/skills/tts-retake/SKILL.md) lets a coding agent such as Claude Code inspect the machine
