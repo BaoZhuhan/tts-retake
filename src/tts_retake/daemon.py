@@ -69,8 +69,28 @@ class Board:
             name = "synth" if t["type"] == "synth" else f"check_{w.get('kind', 'cpu')}"
             if result.get("ok"):
                 self.speed[name] = round(0.7 * self.speed[name] + 0.3 * seconds, 1)
-            self.results.append({**result, "dialogue": dialogue, "type": t["type"], "seconds": round(seconds, 1), "worker": worker})
+            self.results.append({**result, "dialogue": dialogue, "type": t["type"], "seconds": round(seconds, 1), "worker": worker,
+                                 "kind": w.get("kind")})
             return {"ok": True}
+
+    def free(self, worker, reason):
+        w = self.workers.pop(worker, None) or {}
+        for t in self.tasks.values():
+            if t["worker"] == worker:
+                t["worker"] = None
+                self.results.append({"released": reason, "dialogue": t["dialogue"], "type": t["type"], "worker": worker,
+                                     "seconds": round(time.time() - t["started"], 1)})
+        return w
+
+    def release(self, worker, reason):
+        with self.lock:
+            self.free(worker, reason)
+            return {"ok": True}
+
+    def release_handle(self, handle, reason):
+        with self.lock:
+            for worker in [k for k, w in self.workers.items() if handle and w.get("handle") == handle]:
+                self.free(worker, reason)
 
     def expire(self):
         with self.lock:
@@ -97,6 +117,7 @@ class Daemon:
         token = secrets.token_hex(16)
         routes = {"/claim": lambda b: board.claim(b["worker"]), "/beat": lambda b: board.beat(b["worker"], b.get("dialogue")),
                   "/done": lambda b: board.done(b["worker"], b["dialogue"], b["result"]), "/config": lambda b: cfg,
+                  "/release": lambda b: board.release(b["worker"], b.get("reason", "released")),
                   "/status": lambda b: board.snapshot()}
 
         class Handler(BaseHTTPRequestHandler):

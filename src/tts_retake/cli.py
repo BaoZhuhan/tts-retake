@@ -27,6 +27,9 @@ def run(a):
     except KeyboardInterrupt:
         print("stopped; run the same command again to continue")
         return 130
+    except RuntimeError as e:
+        print(f"stopped: {e}", file=sys.stderr)
+        return 1
     print(json.dumps({s: sum(v == s for v in status.values()) for s in set(status.values())}))
     return 0 if all(v == "done" for v in status.values()) else 1
 
@@ -50,6 +53,8 @@ def status(a):
     print(f"{s['at']}  dialogues {s['dialogues']}  " + "  ".join(f"{k} {v}" for k, v in s["counts"].items() if v))
     print("queued " + json.dumps(board["queued"]) + "  running " + json.dumps(board["running"]) + "  wanted workers " + json.dumps(s["demand"]))
     print("seconds per task " + json.dumps(board["seconds_per_task"]))
+    for kind, counts in s.get("worker_exits", {}).items():
+        print(f"{kind} workers ended: " + "  ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     for w, info in board["workers"].items():
         print(f"  {w}  {info['kind']}  {info.get('task') or 'idle'}  done {info.get('done', 0)}")
     return 0

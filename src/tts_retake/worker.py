@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -19,10 +20,17 @@ SRC = str(Path(__file__).resolve().parents[1])
 def gpu_memory_gb():
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=60).stdout.split()
+                             capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
-    return float(out[0]) / 1024 if out else None
+    try:
+        return float(out.stdout.split()[0]) / 1024 if out.returncode == 0 else None
+    except (IndexError, ValueError):
+        return None
+
+
+class Interrupted(RuntimeError):
+    pass
 
 
 def with_src(env):
@@ -43,7 +51,10 @@ class Engine:
         self.proc.stdin.flush()
         line = self.proc.stdout.readline()
         if not line:
-            raise RuntimeError(f"{kind} engine exited with code {self.proc.wait()}")
+            code = self.proc.wait()
+            if code == -signal.SIGTERM:
+                raise Interrupted(f"{kind} engine was terminated")
+            raise RuntimeError(f"{kind} engine exited with code {code}")
         return json.loads(line)
 
     def close(self):
@@ -62,6 +73,8 @@ class Worker:
         self.kind = "cpu" if memory is not None and memory < self.cfg["scheduler"]["min_gpu_gb"] else kind
         self.id = f"{socket.gethostname().split('.')[0]}-{os.getpid()}-{uuid.uuid4().hex[:4]}"
         self.engines, self.task = {}, None
+        self.handle = os.environ.get("TTS_RETAKE_HANDLE") or os.environ.get("SLURM_JOB_ID", "")
+        signal.signal(signal.SIGTERM, self.stop)
 
     def engine(self, kind) -> Engine:
         spec = self.cfg["engines"][kind]
@@ -69,6 +82,20 @@ class Worker:
         if key not in self.engines or not self.engines[key].alive():
             self.engines[key] = Engine(spec, self.cfg, "cuda" if self.kind == "gpu" else "cpu")
         return self.engines[key]
+
+    def release(self, reason):
+        try:
+            call(self.info, "/release", {"worker": self.id, "dialogue": self.task, "reason": reason}, timeout=10)
+        except OSError:
+            pass
+
+    def stop(self, signum, _frame):
+        signal.signal(signum, signal.SIG_DFL)
+        self.release(signal.Signals(signum).name)
+        for e in self.engines.values():
+            if e.alive():
+                e.proc.kill()
+        os._exit(128 + signum)
 
     def heartbeat(self):
         while True:
@@ -81,7 +108,7 @@ class Worker:
     def loop(self):
         threading.Thread(target=self.heartbeat, daemon=True).start()
         last_work, misses = time.time(), 0
-        me = {"id": self.id, "kind": self.kind, "host": socket.gethostname(), "job": os.environ.get("SLURM_JOB_ID", "")}
+        me = {"id": self.id, "kind": self.kind, "host": socket.gethostname(), "handle": self.handle}
         while time.time() - last_work < 60 * self.cfg["scheduler"]["idle_minutes"] and misses < 40:
             try:
                 reply = call(self.info, "/claim", {"worker": me})
@@ -99,6 +126,11 @@ class Worker:
             self.task = task["dialogue"]
             try:
                 result = self.engine(task["type"]).run(task["type"], str(Path(self.cfg["job"]["output"]) / task["dialogue"]))
+            except Interrupted:
+                time.sleep(5)
+                self.release("engine terminated")
+                self.task = None
+                continue
             except Exception as e:
                 result = {"ok": False, "error": repr(e)[-3000:]}
             self.task, last_work = None, time.time()

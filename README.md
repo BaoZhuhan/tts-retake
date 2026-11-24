@@ -70,6 +70,11 @@ tts-retake worker --url http://controller-host:PORT --token TOKEN --kind gpu
 
 The URL and token are in `output/.run/daemon.json`.
 
+A worker that is preempted, reaches its time limit or is cancelled hands its task back at once, and the task is not counted as an
+error. The controller submits replacement workers as long as work remains and counts ended workers by cause (`tts-retake status`,
+`output/.run/workers.log`). After `max_worker_failures` failed workers of one kind in a row (default 10) it stops, since the
+environment is probably broken.
+
 All settings and their defaults are in [`src/tts_retake/config.py`](src/tts_retake/config.py). The defaults come from synthesizing and
 repairing 1,410 English clinical dialogues (about 11,000 chunks) for the SIMAX dataset.
 

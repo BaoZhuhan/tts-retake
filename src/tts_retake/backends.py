@@ -5,6 +5,7 @@ import getpass
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -14,6 +15,11 @@ from .worker import SRC, with_src
 
 def worker_command(cfg, run, kind) -> list[str]:
     return [cfg["worker"]["python"], "-m", "tts_retake", "worker", "--daemon", str(run / "daemon.json"), "--kind", kind]
+
+
+FAILED_STATES = {"FAILED", "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL"}
+OUTCOMES = {"PREEMPTED": "preempted", "TIMEOUT": "timeout", "DEADLINE": "timeout", "CANCELLED": "cancelled", "COMPLETED": "finished",
+            **{s: "failed" for s in FAILED_STATES}}
 
 
 def make(cfg, run):
@@ -28,6 +34,9 @@ class Manual:
     def scale(self, demand):
         pass
 
+    def ended(self) -> list:
+        return []
+
     def shutdown(self):
         pass
 
@@ -37,7 +46,7 @@ class Local(Manual):
         super().__init__(cfg, run)
         gpus = cfg["local"]["gpus"]
         self.gpus = [str(g) for g in (self.detect() if gpus == "auto" else gpus)]
-        self.procs = {}
+        self.procs, self.started = {}, 0
 
     @staticmethod
     def detect():
@@ -47,20 +56,34 @@ class Local(Manual):
             return []
         return out.stdout.split() if out.returncode == 0 else []
 
+    def ended(self) -> list:
+        out = []
+        for slot, (kind, handle, p) in list(self.procs.items()):
+            code = p.poll()
+            if code is None:
+                continue
+            del self.procs[slot]
+            outcome = "finished" if code == 0 else "cancelled" if code in (-signal.SIGTERM, 128 + signal.SIGTERM) else "failed"
+            out.append({"handle": handle, "kind": kind, "outcome": outcome, "detail": f"exit {code}"})
+        return out
+
     def scale(self, demand):
-        self.procs = {slot: p for slot, p in self.procs.items() if p.poll() is None}
         wanted = [("gpu", g) for g in self.gpus[:demand["gpu"]]]
         wanted += [("cpu", str(i)) for i in range(min(self.cfg["local"]["cpu_workers"], demand["cpu"]))]
         for kind, slot in wanted:
             if f"{kind}{slot}" not in self.procs:
-                env = with_src({**os.environ, **self.cfg["worker"]["env"], "CUDA_VISIBLE_DEVICES": slot if kind == "gpu" else ""})
+                self.started += 1
+                handle = f"local-{kind}{slot}-{self.started}"
+                env = with_src({**os.environ, **self.cfg["worker"]["env"], "CUDA_VISIBLE_DEVICES": slot if kind == "gpu" else "",
+                                "TTS_RETAKE_HANDLE": handle})
                 with open(self.run / "logs" / f"worker-{kind}{slot}.log", "a") as log:
-                    self.procs[f"{kind}{slot}"] = subprocess.Popen(worker_command(self.cfg, self.run, kind), env=env, stdout=log, stderr=log)
+                    p = subprocess.Popen(worker_command(self.cfg, self.run, kind), env=env, stdout=log, stderr=log)
+                self.procs[f"{kind}{slot}"] = (kind, handle, p)
 
     def shutdown(self):
-        for p in self.procs.values():
+        for _, _, p in self.procs.values():
             p.terminate()
-        for p in self.procs.values():
+        for _, _, p in self.procs.values():
             try:
                 p.wait(timeout=60)
             except subprocess.TimeoutExpired:
@@ -79,12 +102,15 @@ class Slurm(Manual):
         super().__init__(cfg, run)
         self.ledger = run / "slurm_jobs.json"
         self.jobs = read_json(self.ledger, {})
+        self.gone = {}
 
     def script(self, kind) -> str:
         s = self.cfg["slurm"]
         name = f"{s['job_name']}-{kind}"
         lines = ["#!/bin/bash", f"#SBATCH --job-name={name}", f"#SBATCH --output={self.run / 'logs'}/{name}-%j.out"]
         lines += [f"#SBATCH --{k}={v}" for k, v in s[kind]["options"].items() if v not in ("", None)]
+        if not {"requeue", "no-requeue"} & set(s[kind]["options"]):
+            lines.append("#SBATCH --no-requeue")
         lines += list(s["setup"])
         lines += [f"export {k}={shlex.quote(str(v))}" for k, v in self.cfg["worker"]["env"].items()]
         lines += [f"export PYTHONPATH={shlex.quote(SRC)}${{PYTHONPATH:+:$PYTHONPATH}}", "exec " + shlex.join(worker_command(self.cfg, self.run, kind))]
@@ -95,9 +121,33 @@ class Slurm(Manual):
         if out.returncode:
             return {j: dict(v, state="UNKNOWN") for j, v in self.jobs.items()}
         states = dict(line.split() for line in out.stdout.splitlines() if line.strip())
+        self.gone.update({j: v for j, v in self.jobs.items() if j not in states})
         self.jobs = {j: dict(v, state=states[j]) for j, v in self.jobs.items() if j in states}
         write_json(self.ledger, self.jobs)
         return self.jobs
+
+    def ended(self) -> list:
+        if not self.gone:
+            return []
+        out = subprocess.run(["sacct", "-n", "-X", "-P", "-j", ",".join(self.gone), "-o", "JobID,State,ExitCode,NodeList"],
+                             capture_output=True, text=True, timeout=120)
+        final = {}
+        for line in out.stdout.splitlines():
+            parts = line.split("|")
+            if len(parts) == 4:
+                final[parts[0]] = parts[1:]
+        done = []
+        for j, v in list(self.gone.items()):
+            state, code, node = final.get(j, ["", "", ""])
+            word = state.split()[0] if state else ""
+            if word in ("RUNNING", "PENDING", "REQUEUED", "COMPLETING", "SUSPENDED"):
+                continue
+            if not word and out.returncode == 0 and v.setdefault("tries", 0) < 3:
+                v["tries"] += 1
+                continue
+            del self.gone[j]
+            done.append({"handle": j, "kind": v["kind"], "outcome": OUTCOMES.get(word, "unknown"), "detail": f"{state or 'no record'} exit {code} {node}".strip()})
+        return done
 
     def fits(self, kind) -> bool:
         s = self.cfg["slurm"]

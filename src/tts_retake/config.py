@@ -18,7 +18,7 @@ DEFAULTS = {
               "drift_hard": 0.15, "female_f0_min": 145, "male_f0_max": 175},
     "repair": {"max_redos": 6, "split_after": 2, "chronic_after": 3, "retry_suspect": True, "max_task_errors": 3},
     "scheduler": {"backend": "local", "host": "", "port": 0, "interval_seconds": 15, "lease_minutes": 20,
-                  "idle_minutes": 30, "target_minutes": 60, "min_gpu_gb": 20,
+                  "idle_minutes": 30, "target_minutes": 60, "min_gpu_gb": 20, "max_worker_failures": 10,
                   "estimates": {"synth": 900, "check_gpu": 60, "check_cpu": 180}},
     "engines": {"synth": {"python": "", "env": {}}, "check": {"python": "", "env": {}}},
     "worker": {"python": "", "env": {}},

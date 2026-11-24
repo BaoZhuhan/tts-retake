@@ -33,3 +33,13 @@ class FakeCheck:
             chunks.append({"k": k, "turns": chunk, "status": status, "fail": [], "suspect": []})
         write_json(f.path("verdict.json"), {"sig": [f.sig(k) for k in range(len(plan["chunks"]))], "chunks": chunks})
         return {"status": [c["status"] for c in chunks]}
+
+
+class FakeSlow:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def run(self, folder):
+        import time
+        time.sleep(300)
+        return {}

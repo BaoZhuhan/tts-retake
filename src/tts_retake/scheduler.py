@@ -24,6 +24,8 @@ class Controller:
         self.dialogues = {d["id"]: d for d in dialogues[: cfg["job"]["limit"] or None]}
         self.errors = read_json(self.run / "errors.json", {})
         self.status = {}
+        self.exits = read_json(self.run / "worker_exits.json", {})
+        self.failed_in_row = {"gpu": 0, "cpu": 0}
         self.board = Board(cfg)
         self.daemon = Daemon(self.board, cfg, self.run)
         self.backend = backends.make(cfg, self.run)
@@ -96,10 +98,35 @@ class Controller:
         cpu = min(spare, math.ceil(spare * est["check_cpu"] / horizon)) if cpu_possible and spare else 0
         return {"gpu": max(gpu, 1 if synth else 0), "cpu": max(cpu, 1 if spare and cpu_possible else 0)}
 
+    def log(self, name, entry):
+        with open(self.run / name, "a") as log:
+            log.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), **entry}) + "\n")
+
+    def account(self, ended):
+        for e in ended:
+            self.board.release_handle(e["handle"], f"worker {e['outcome']}")
+            counts = self.exits.setdefault(e["kind"], {})
+            counts[e["outcome"]] = counts.get(e["outcome"], 0) + 1
+            self.log("workers.log", e)
+            if e["outcome"] == "failed":
+                self.failed_in_row[e["kind"]] += 1
+        write_json(self.run / "worker_exits.json", self.exits)
+        limit = self.cfg["scheduler"]["max_worker_failures"]
+        for kind, n in self.failed_in_row.items():
+            if limit and n >= limit:
+                raise RuntimeError(f"{n} {kind} workers failed in a row; see {self.run / 'workers.log'} and {self.run / 'logs'}")
+
     def step(self) -> bool:
         self.board.expire()
-        for r in self.board.drain():
-            if not r.get("ok"):
+        results = self.board.drain()
+        for r in results:
+            if r.get("ok") and r.get("kind") in self.failed_in_row:
+                self.failed_in_row[r["kind"]] = 0
+        self.account(self.backend.ended())
+        for r in results:
+            if "released" in r:
+                self.log("released.log", r)
+            elif not r.get("ok"):
                 self.errors[r["dialogue"]] = self.errors.get(r["dialogue"], 0) + 1
                 with open(self.run / "errors.log", "a") as log:
                     log.write(json.dumps(r) + "\n")
@@ -110,7 +137,7 @@ class Controller:
         self.backend.scale(demand)
         counts = {s: sum(v == s for v in self.status.values()) for s in ("synth", "check", "queued", "working", *FINAL)}
         write_json(self.run / "status.json", {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "dialogues": len(self.status), "counts": counts,
-                                              "demand": demand, "board": self.board.snapshot()})
+                                              "demand": demand, "board": self.board.snapshot(), "worker_exits": self.exits})
         return all(v in FINAL for v in self.status.values())
 
     def report(self):
