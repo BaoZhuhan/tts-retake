@@ -2,7 +2,7 @@
 import numpy as np, librosa
 
 
-def sustained_windows(y: np.ndarray, sr: int, win_s=1.0, hop_s=0.5, min_db=-35.0, max_cv=0.5, max_mod=0.3):
+def sustained_windows(y: np.ndarray, sr: int, win_s=1.0, hop_s=0.5, min_db=-35.0, max_cv=0.5, max_mod=0.3, flat_cv=0.1):
     hop = 240 if sr >= 20000 else 160
     rms = librosa.feature.rms(y=y, frame_length=2 * hop, hop_length=hop)[0]
     fps = sr / hop
@@ -15,7 +15,7 @@ def sustained_windows(y: np.ndarray, sr: int, win_s=1.0, hop_s=0.5, min_db=-35.0
         env = r - r.mean()
         fe = np.abs(np.fft.rfft(env * np.hanning(len(env)))); fr = np.fft.rfftfreq(len(env), 1 / fps)
         mod = fe[(fr >= 2) & (fr <= 8)].sum() / (fe[1:].sum() + 1e-9)
-        out.append((i / fps, float(db > min_db and cv < max_cv and mod < max_mod)))
+        out.append((i / fps, float(db > min_db and (cv < flat_cv or (cv < max_cv and mod < max_mod)))))
     return np.array(out)
 
 
