@@ -15,7 +15,7 @@ DEFAULTS = {
               "missing_fail": 0.20, "missing_suspect": 0.10, "added_fail": 0.18, "added_suspect": 0.08,
               "wpm_fail": [95, 225], "wpm_suspect": [110, 195], "silence_suspect": 6.0, "swap_margin": 0.05,
               "swap_run_cross_gender": 3, "swap_run_same_gender": 4, "drift_own": 0.30, "drift_reference": 0.25,
-              "drift_hard": 0.15, "female_f0_min": 145, "male_f0_max": 175},
+              "drift_hard": 0.15, "female_f0_min": 145, "male_f0_max": 175, "assemble": True},
     "repair": {"max_redos": 6, "split_after": 2, "chronic_after": 3, "retry_suspect": True, "max_task_errors": 3},
     "scheduler": {"backend": "local", "host": "", "port": 0, "interval_seconds": 15, "lease_minutes": 20,
                   "idle_minutes": 30, "target_minutes": 60, "min_gpu_gb": 20, "max_worker_failures": 10,

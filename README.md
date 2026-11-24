@@ -3,7 +3,7 @@
 Quality-gated two-speaker dialogue synthesis with [MOSS-TTSD](https://github.com/OpenMOSS/MOSS-TTSD). Long dialogues are synthesized in chunks;
 every chunk is checked automatically, and only the chunks that fail are synthesized again.
 
-- **Checks**: Whisper word alignment (missing or added words, dropped opening or ending, reference text read aloud), speaking rate,
+- **Checks**: Whisper or Parakeet word alignment (missing or added words, dropped opening or ending, reference text read aloud), speaking rate,
   sustained tones, long silences, and ECAPA speaker similarity for swapped or drifting voices.
 - **Repair**: a failed chunk is retaken up to 6 times and split in two after 2 retakes; a suspect chunk gets one more take that is kept only
   if it passes; chunks that never pass are listed for human review.
@@ -21,7 +21,7 @@ pip install -e .
 ```
 
 The controller needs Python 3.11 and nothing else. Synthesis needs an environment with MOSS-TTSD and the `clis/` folder of the
-[MOSS-TTS repository](https://github.com/OpenMOSS/MOSS-TTS); checks need `openai-whisper`, `speechbrain` and `librosa`. Each can live in its own
+[MOSS-TTS repository](https://github.com/OpenMOSS/MOSS-TTS); checks need `speechbrain`, `librosa` and `openai-whisper` (or NeMo for `asr = "nvidia/parakeet-tdt-0.6b-v2"`). Each can live in its own
 environment; the cluster file says which Python runs which step.
 
 ## Input
@@ -70,18 +70,15 @@ tts-retake worker --url http://controller-host:PORT --token TOKEN --kind gpu
 
 The URL and token are in `output/.run/daemon.json`.
 
-A worker that is preempted, reaches its time limit or is cancelled hands its task back at once, and the task is not counted as an
-error. The controller submits replacement workers as long as work remains and counts ended workers by cause (`tts-retake status`,
-`output/.run/workers.log`). After `max_worker_failures` failed workers of one kind in a row (default 10) it stops, since the
-environment is probably broken.
+A preempted or cancelled worker hands its task back at once and is replaced; the controller stops after `max_worker_failures`
+failed workers of one kind in a row.
 
 All settings and their defaults are in [`src/tts_retake/config.py`](src/tts_retake/config.py). The defaults come from synthesizing and
 repairing 1,410 English clinical dialogues (about 11,000 chunks) for the SIMAX dataset.
 
 ## Benchmark the checks
 
-To measure how well the checks separate good chunks from bad ones, start from dialogue folders whose chunks you trust (each with
-`plan.json`, `chunk_NNN.wav` and a `spans.json` giving every turn's start and end in its chunk) and cut known defects into them:
+Start from dialogue folders whose chunks you trust (`plan.json`, `chunk_NNN.wav`, and `spans.json` with each turn's start and end):
 
 ```bash
 tts-retake bench build trusted/ bench/ --per-kind 30 --clean 60
@@ -90,11 +87,8 @@ tts-retake run runs/whisper-small/job.toml --cluster my-cluster.toml
 tts-retake bench score runs/whisper-small
 ```
 
-`build` keeps some folders unchanged and, in the middle chunk of others, removes turns from the middle, the opening or the ending,
-inserts speech from another dialogue, prepends a speaker's reference clip, speeds speech up or slows it down, or inserts a long silence
-or a sustained tone. Folders that already carry a `label.json` with a defect (for example a chunk spoken in a third voice) are copied
-as they are. `prepare` writes a check-only job (nothing is retaken), and `score` reports, for each kind of defect, how often the checks
-flag it and for the right reason, and how often clean chunks are flagged.
+`build` cuts known defects into the middle chunk of some folders (removed or inserted speech, reference clip, rate, silence, tone) and
+copies folders that already carry a labelled `label.json`. `score` reports detection per defect and the flag rate of clean chunks.
 
 ## Agent skill
 

@@ -1,4 +1,4 @@
-"""Automatic checks of synthesized chunks: Whisper fidelity, speaking rate, reference leak, tones, silences and ECAPA speaker similarity."""
+"""Automatic checks of synthesized chunks: ASR fidelity (Whisper or Parakeet), speaking rate, reference leak, tones, silences and ECAPA speaker similarity."""
 from __future__ import annotations
 
 import difflib
@@ -106,10 +106,36 @@ def judge(plan, checks, embeddings, refs, th) -> dict:
     return {"cross_gender": cross, "chunks": chunks}
 
 
+class Whisper:
+    def __init__(self, name, device):
+        import whisper
+
+        self.model, self.fp16 = whisper.load_model(name, device=device), device == "cuda"
+
+    def words(self, y16):
+        r = self.model.transcribe(y16, language="en", fp16=self.fp16, condition_on_previous_text=False, word_timestamps=True)
+        return [[w["word"], round(w["start"], 2), round(w["end"], 2)] for s in r["segments"] for w in s.get("words", [])]
+
+
+class Parakeet:
+    def __init__(self, name, device):
+        import nemo.collections.asr as nemo_asr
+
+        self.model = nemo_asr.models.ASRModel.from_pretrained(name, map_location=device).eval()
+
+    def words(self, y16):
+        out = self.model.transcribe([np.ascontiguousarray(y16, dtype=np.float32)], timestamps=True, batch_size=1, verbose=False)
+        hyp = (out[0] if isinstance(out, tuple) else out)[0]
+        return [[w["word"], round(float(w["start"]), 2), round(float(w["end"]), 2)] for w in hyp.timestamp["word"]]
+
+
+def asr_model(name, device):
+    return (Parakeet if "parakeet" in name.lower() else Whisper)(name, device)
+
+
 class Checker:
     def __init__(self, cfg):
         import torch
-        import whisper
         from speechbrain.inference.speaker import EncoderClassifier
 
         self.cfg, self.torch = cfg["check"], torch
@@ -117,7 +143,7 @@ class Checker:
         if self.device == "cuda" and not torch.cuda.is_available():
             self.device = "cpu"
         self.cache = Path(cfg["job"]["output"]) / ".cache"
-        self.asr = whisper.load_model(self.cfg["asr"], device=self.device)
+        self.asr = asr_model(self.cfg["asr"], self.device)
         self.encoder = EncoderClassifier.from_hparams(source=self.cfg["speaker_model"], savedir=str(self.cache / "speaker_model"),
                                                       run_opts={"device": self.device})
 
@@ -148,11 +174,10 @@ class Checker:
 
     def transcribe(self, f, k, y16):
         cached = read_json(f.chunk(k, "words.json"))
-        if cached and cached.get("sig") == f.sig(k):
+        if cached and cached.get("sig") == f.sig(k) and cached.get("asr") == self.cfg["asr"]:
             return cached["words"]
-        r = self.asr.transcribe(y16, language="en", fp16=self.device == "cuda", condition_on_previous_text=False, word_timestamps=True)
-        words = [[w["word"], round(w["start"], 2), round(w["end"], 2)] for s in r["segments"] for w in s.get("words", [])]
-        write_json(f.chunk(k, "words.json"), {"sig": f.sig(k), "words": words})
+        words = self.asr.words(y16)
+        write_json(f.chunk(k, "words.json"), {"sig": f.sig(k), "asr": self.cfg["asr"], "words": words})
         return words
 
     def check_chunk(self, f, plan, k, trimmed=0.0):
@@ -243,6 +268,7 @@ class Checker:
         checks = [read_json(f.chunk(k, "check.json")) for k in range(n)]
         verdict = judge(plan, checks, [np.load(f.chunk(k, "emb.npy")) for k in range(n)], refs, self.cfg)
         verdict["sig"] = [f.sig(k) for k in range(n)]
-        verdict["audio"] = f.assemble()
+        if self.cfg["assemble"]:
+            verdict["audio"] = f.assemble()
         write_json(f.path("verdict.json"), verdict)
         return {"checked": checked, "status": [c["status"] for c in verdict["chunks"]]}

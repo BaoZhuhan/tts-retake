@@ -251,7 +251,7 @@ def prepare(bench, run) -> Path:
         for wav in item.glob("chunk_*.wav"):
             link(wav, d / wav.name)
     job = run / "job.toml"
-    job.write_text(f'[job]\ninput = "{bench / "input.jsonl"}"\noutput = "output"\n\n[repair]\nmax_redos = 0\nretry_suspect = false\n')
+    job.write_text(f'[job]\ninput = "{bench / "input.jsonl"}"\noutput = "output"\n\n[check]\nassemble = false\n\n[repair]\nmax_redos = 0\nretry_suspect = false\n')
     return job
 
 
