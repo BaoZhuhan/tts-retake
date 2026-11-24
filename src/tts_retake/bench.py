@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from .dialogue import read_json, write_json
+from .language import units
 
 KINDS = {"drop_middle": "fail", "drop_opening": "fail", "drop_ending": "fail", "insert_speech": "fail", "leak": "fail",
          "fast": "fail", "slow": "fail", "silence": "flag", "tone": "fail"}
@@ -50,7 +51,7 @@ def layout(spans, seconds):
 
 
 def words_of(plan, turn):
-    return len(plan["turns"][turn]["text"].split())
+    return units(plan["turns"][turn]["text"])
 
 
 class Defects:

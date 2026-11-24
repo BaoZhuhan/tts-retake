@@ -9,6 +9,8 @@ import re
 import shutil
 from pathlib import Path
 
+from .language import check, units
+
 CHUNK_FILES = ("wav", "check.json", "emb.npy", "words.json", "attempts.json")
 
 
@@ -47,7 +49,7 @@ def load_dialogues(path) -> list[dict]:
             raise ValueError(f"{where}: ids must be unique and use letters, digits, '.', '_' or '-'")
         seen.add(did)
         dialogues.append({
-            "id": did, "priority": float(d.get("priority", 0)),
+            "id": did, "priority": float(d.get("priority", 0)), "language": check(str(d.get("language", "en"))),
             "speakers": {k: {"voice": str((path.parent / v["voice"]).resolve()), "text": v["text"]} for k, v in speakers.items()},
             "turns": [{k: t[k] for k in ("speaker", "text", "pause") if k in t} for t in turns],
         })
@@ -63,9 +65,9 @@ def pauses(turns, seed: str) -> list[float]:
 def chunk_turns(turns, gaps, max_words: int, min_words: int, cut_pause: float) -> list[list[int]]:
     chunks, start, words = [], 0, 0
     for i, turn in enumerate(turns):
-        words += len(turn["text"].split())
+        words += units(turn["text"])
         last = i == len(turns) - 1
-        following = 0 if last else len(turns[i + 1]["text"].split())
+        following = 0 if last else units(turns[i + 1]["text"])
         if last or words + following > max_words or (words >= min_words and gaps[i] >= cut_pause):
             chunks.append([start, i + 1])
             start, words = i + 1, 0
@@ -133,7 +135,7 @@ class Folder:
         a, b = plan["chunks"][k]
         if b - a < 2:
             return False
-        words = [len(t["text"].split()) for t in plan["turns"][a:b]]
+        words = [units(t["text"]) for t in plan["turns"][a:b]]
         sums = [sum(words[:i]) for i in range(1, len(words))]
         cut = a + 1 + min(range(len(sums)), key=lambda i: abs(sums[i] - sum(words) / 2))
         for j in range(len(plan["chunks"]) - 1, k, -1):

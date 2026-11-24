@@ -5,6 +5,7 @@ import sys
 import time
 
 from .dialogue import Folder, write_json
+from .language import units
 
 
 class Synth:
@@ -91,7 +92,7 @@ class Synth:
             if f.chunk(k).exists():
                 continue
             turns = plan["turns"][a:b]
-            words = sum(len(t["text"].split()) for t in turns)
+            words = sum(units(t["text"]) for t in turns)
             body = "".join(f"[S{1 if t['speaker'] == first else 2}] {t['text']} " for t in turns)
             prefix, prompt = prompts[turns[0]["speaker"]]
             started = time.time()

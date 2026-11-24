@@ -4,19 +4,12 @@ from __future__ import annotations
 import difflib
 import hashlib
 import os
-import re
 from pathlib import Path
 
 import numpy as np
 
 from .dialogue import Folder, read_json, write_json
-
-TOKEN = re.compile(r"[a-z0-9']+")
-
-
-def tokens(text: str) -> list[str]:
-    return [t.strip("'") for t in TOKEN.findall(text.lower().replace("’", "'")) if t.strip("'")]
-
+from .language import is_cjk, tokens, wpm
 
 def f0_of(y):
     import librosa
@@ -132,8 +125,8 @@ class Whisper:
 
         self.model, self.fp16 = whisper.load_model(name, device=device), device == "cuda"
 
-    def words(self, y16):
-        r = self.model.transcribe(y16, language="en", fp16=self.fp16, condition_on_previous_text=False, word_timestamps=True)
+    def words(self, y16, lang):
+        r = self.model.transcribe(y16, language=lang, fp16=self.fp16, condition_on_previous_text=False, word_timestamps=True)
         return [[w["word"], round(w["start"], 2), round(w["end"], 2)] for s in r["segments"] for w in s.get("words", [])]
 
 
@@ -147,7 +140,9 @@ class Parakeet:
             path = hf_hub_download(name, name.split("/")[-1] + ".nemo")
         self.model = nemo_asr.models.ASRModel.restore_from(path, map_location=device).eval()
 
-    def words(self, y16):
+    def words(self, y16, lang):
+        if lang != "en":
+            raise ValueError("Parakeet-TDT checks English only; set check.asr_multilingual for other languages")
         out = self.model.transcribe([np.ascontiguousarray(y16, dtype=np.float32)], timestamps=True, batch_size=1, verbose=False)
         hyp = (out[0] if isinstance(out, tuple) else out)[0]
         return [[w["word"], round(float(w["start"]), 2), round(float(w["end"]), 2)] for w in hyp.timestamp["word"]]
@@ -167,7 +162,7 @@ class Checker:
         if self.device == "cuda" and not torch.cuda.is_available():
             self.device = "cpu"
         self.cache = Path(cfg["job"]["output"]) / ".cache"
-        self.asr = asr_model(self.cfg["asr"], self.device)
+        self.asrs = {}
         src = self.cfg["speaker_model"]
         self.encoder = EncoderClassifier.from_hparams(source=src, savedir=str(self.cache / "speaker_model"), run_opts={"device": self.device},
                                                       overrides={"pretrained_path": src} if os.path.isdir(src) else {})
@@ -197,12 +192,15 @@ class Checker:
         z = np.load(path)
         return z["emb"], float(z["f0"]) or None
 
-    def transcribe(self, f, k, y16):
+    def transcribe(self, f, k, y16, lang):
+        name = self.cfg["asr"] if lang == "en" else self.cfg["asr_multilingual"]
         cached = read_json(f.chunk(k, "words.json"))
-        if cached and cached.get("sig") == f.sig(k) and cached.get("asr") == self.cfg["asr"]:
+        if cached and cached.get("sig") == f.sig(k) and cached.get("asr") == name:
             return cached["words"]
-        words = self.asr.words(y16)
-        write_json(f.chunk(k, "words.json"), {"sig": f.sig(k), "asr": self.cfg["asr"], "words": words})
+        if name not in self.asrs:
+            self.asrs[name] = asr_model(name, self.device)
+        words = self.asrs[name].words(y16, lang)
+        write_json(f.chunk(k, "words.json"), {"sig": f.sig(k), "asr": name, "words": words})
         return words
 
     def check_chunk(self, f, plan, k, trimmed=0.0):
@@ -212,10 +210,10 @@ class Checker:
         from .sustained import runs, sustained_windows
 
         lo, hi = plan["chunks"][k]
-        turns = plan["turns"]
+        turns, lang = plan["turns"], plan.get("language", "en")
         y, sr, y16 = self.load16k(f.chunk(k))
         hyp, times = [], []
-        for w, s, e in self.transcribe(f, k, y16):
+        for w, s, e in self.transcribe(f, k, y16, lang):
             for t in tokens(w):
                 hyp.append(t)
                 times.append((s, e))
@@ -231,7 +229,7 @@ class Checker:
                 found[a + j] = times[b + j]
                 matched.add(b + j)
         vocab = {t for turn in turns for t in tokens(turn["text"])}
-        leak_words = {t for s in plan["order"] for t in tokens(plan["speakers"][s]["text"]) if len(t) >= 5} - vocab
+        leak_words = {t for s in plan["order"] for t in tokens(plan["speakers"][s]["text"]) if len(t) >= 5 or is_cjk(t)} - vocab
         leaked = [j for j in range(len(hyp)) if j not in matched and hyp[j] in leak_words]
         blocks = [(a, b) for a, b, n in sm.get_matching_blocks() if n >= 4]
         if leaked and not trimmed and blocks and blocks[0][0] <= 3 and max(leaked) < blocks[0][1]:
@@ -270,7 +268,7 @@ class Checker:
         spoken = [r for r in rows if r["words"] >= 3]
         metrics = {"seconds": round(seconds, 2), "words": len(ref),
                    "missing": round(1 - sum(x is not None for x in found) / max(1, len(ref)), 3),
-                   "added": round(1 - len(matched) / max(1, len(hyp)), 3), "wpm": round(len(ref) / max(seconds, 1e-6) * 60, 1),
+                   "added": round(1 - len(matched) / max(1, len(hyp)), 3), "wpm": round(wpm(len(ref), seconds, lang), 1),
                    "leak": sorted({hyp[j] for j in leaked}), "trimmed_s": trimmed,
                    "tone_runs": [[round(a, 1), round(b, 1)] for a, b in (runs(sustained_windows(y, sr)) if len(y) > 3 * sr else [])],
                    "longest_silence_s": round(longest * 320 / 16000, 2),
