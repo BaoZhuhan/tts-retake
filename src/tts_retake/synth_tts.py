@@ -1,5 +1,5 @@
-"""MOSS-TTS (v1.5) synthesis: each turn is cloned from its own speaker's reference, turns of a chunk are generated as one batch
-trimmed of edge silence and joined with the planned pauses."""
+"""MOSS-TTS (v1.5) synthesis: each turn is cloned from its own speaker's reference with a duration hint for target_wpm; turns of a
+chunk are generated as one batch, trimmed of edge silence and joined with the planned pauses."""
 from __future__ import annotations
 
 import time
@@ -34,9 +34,9 @@ class SynthTTS:
         return self.codes[path]
 
     def generate(self, items):
-        convs = [[self.proc.build_user_message(text=t, reference=[self.reference(v)], language=lang)] for t, v, lang in items]
+        convs = [[self.proc.build_user_message(text=t, reference=[self.reference(v)], language=lang, tokens=n)] for t, v, lang, n in items]
         batch = self.proc(convs, mode="generation")
-        longest = max(units(t) for t, _, _ in items)
+        longest = max(units(t) for t, *_ in items)
         with self.torch.no_grad():
             out = self.model.generate(input_ids=batch["input_ids"].to("cuda"), attention_mask=batch["attention_mask"].to("cuda"),
                                       max_new_tokens=int(longest / 2.0 * 12.5 * 2) + 150)
@@ -51,6 +51,12 @@ class SynthTTS:
         p = int(pad * self.sr)
         return audio[max(0, a - p):b + p]
 
+    def tokens(self, text, lang):
+        """Duration hint in 12.5 Hz audio frames that puts the turn at target_wpm, or None when duration_control is off."""
+        if not self.cfg.get("duration_control", True):
+            return None
+        return max(6, round(units(text) * LANGS[lang][1] / self.cfg["target_wpm"] * 60 * 12.5))
+
     def turns(self, plan, idx):
         lang = plan.get("language", "en")
         name, low, high = LANGS[lang][0], *self.cfg["rate_wpm"]
@@ -58,7 +64,8 @@ class SynthTTS:
         for attempt in range(1, self.cfg["attempts"] + 1):
             for s in range(0, len(todo), self.cfg["batch"]):
                 part = todo[s:s + self.cfg["batch"]]
-                items = [(plan["turns"][i]["text"], plan["speakers"][plan["turns"][i]["speaker"]]["voice"], name) for i in part]
+                items = [(plan["turns"][i]["text"], plan["speakers"][plan["turns"][i]["speaker"]]["voice"], name, self.tokens(plan["turns"][i]["text"], lang))
+                         for i in part]
                 for i, audio in zip(part, self.generate(items)):
                     rate = wpm(units(plan["turns"][i]["text"]), len(audio) / self.sr, lang)
                     score = abs(rate - self.cfg["target_wpm"])
