@@ -34,6 +34,17 @@ class SynthTTS:
         return self.codes[path]
 
     def generate(self, items):
+        """Audio for each (text, voice, language, tokens) item; a batch that runs out of GPU memory is split in half and retried."""
+        try:
+            return self.batch(items)
+        except self.torch.cuda.OutOfMemoryError:
+            self.torch.cuda.empty_cache()
+            if len(items) == 1:
+                raise
+            h = len(items) // 2
+            return self.generate(items[:h]) + self.generate(items[h:])
+
+    def batch(self, items):
         convs = [[self.proc.build_user_message(text=t, reference=[self.reference(v)], language=lang, tokens=n)] for t, v, lang, n in items]
         batch = self.proc(convs, mode="generation")
         longest = max(units(t) for t, *_ in items)
