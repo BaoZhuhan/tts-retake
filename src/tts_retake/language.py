@@ -1,8 +1,8 @@
-"""Per-language text handling: tokens for alignment, length units for chunking and speaking rate, and model language names."""
+"""Per-language text handling: tokens for alignment, length units for chunking and speaking rate, and model language names.
+LANGS maps a code to (name MOSS-TTS expects, English words per unit of the same text), so every rate reads as English words per minute."""
 import re
 
-# code: (name used by MOSS-TTS, factor that turns units per minute into English-like words per minute)
-LANGS = {"en": ("English", 1.0), "zh": ("Chinese", 0.6), "fr": ("French", 0.9), "es": ("Spanish", 0.85), "de": ("German", 1.1)}
+LANGS = {"en": ("English", 1.0), "zh": ("Chinese", 0.62), "fr": ("French", 0.89), "es": ("Spanish", 0.97), "de": ("German", 0.97)}
 CJK = "㐀-䶿一-鿿豈-﫿"
 TOKEN = re.compile(rf"[{CJK}]|[^\W_{CJK}]+(?:'[^\W_{CJK}]+)*")
 

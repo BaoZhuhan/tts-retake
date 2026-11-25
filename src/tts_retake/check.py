@@ -11,7 +11,7 @@ import numpy as np
 from .dialogue import Folder, read_json, write_json
 from .language import is_cjk, tokens, wpm
 
-VERSION = 2
+VERSION = 3
 
 def f0_of(y):
     import librosa
