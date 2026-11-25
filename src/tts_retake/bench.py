@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from .dialogue import read_json, write_json
-from .language import units
+from .language import units, wpm
 
 KINDS = {"drop_middle": "fail", "drop_opening": "fail", "drop_ending": "fail", "insert_speech": "fail", "leak": "fail",
          "fast": "fail", "slow": "fail", "silence": "flag", "tone": "fail"}
@@ -133,11 +133,11 @@ class Defects:
     def stretch(self, target):
         import librosa
 
-        wpm = self.total / (len(self.y) / self.sr) * 60
-        rate = target / wpm
+        now = wpm(self.total, len(self.y) / self.sr, self.plan.get("language", "en"))
+        rate = target / now
         if 0.95 < rate < 1.05:
             return None
-        return librosa.effects.time_stretch(self.y, rate=rate), {"wpm_before": round(wpm), "wpm_after": target, "rate": round(rate, 3)}
+        return librosa.effects.time_stretch(self.y, rate=rate), {"wpm_before": round(now), "wpm_after": target, "rate": round(rate, 3)}
 
     def fast(self):
         return self.stretch(250)
@@ -219,7 +219,7 @@ def build(source, out, per_kind=30, clean=60, seed=0, kinds=None) -> dict:
             plan, spans = read_json(p / "plan.json"), read_json(p / "spans.json")
             k = len(plan["chunks"]) // 2
             y, sr = load(p / f"chunk_{k:03d}.wav")
-            others = [d for d in donors if d[0]["id"] != plan["id"]]
+            others = [d for d in donors if d[0]["id"] != plan["id"] and d[0].get("language", "en") == plan.get("language", "en")]
             result = getattr(Defects(plan, k, y, sr, spans["chunks"][k], rng, others), kind)()
             if result is None:
                 continue
