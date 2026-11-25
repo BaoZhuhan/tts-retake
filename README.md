@@ -43,7 +43,7 @@ One dialogue per line of a JSONL file. Voice paths are relative to the file; `te
 ```
 
 `pause` (seconds after a turn) is optional. Higher `priority` dialogues go first. `language` is `en` (default), `zh`, `fr`, `es`
-or `de`; English is checked with `check.asr`, other languages with `check.asr_multilingual` (Whisper large-v3-turbo).
+or `de`; English is checked with `check.asr`, other languages with `check.asr_multilingual` (Whisper large-v3).
 
 ## Run
 
