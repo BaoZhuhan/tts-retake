@@ -22,7 +22,7 @@ class Controller:
         self.run.mkdir(parents=True, exist_ok=True)
         dialogues = load_dialogues(cfg["job"]["input"])
         self.dialogues = {d["id"]: d for d in dialogues[: cfg["job"]["limit"] or None]}
-        self.errors = read_json(self.run / "errors.json", {})
+        self.errors = {k: v for k, v in read_json(self.run / "errors.json", {}).items() if isinstance(v, list)}
         self.status = {}
         self.exits = read_json(self.run / "worker_exits.json", {})
         self.failed_in_row = {"gpu": 0, "cpu": 0}
@@ -31,7 +31,9 @@ class Controller:
         self.backend = backends.make(cfg, self.run)
 
     def advance(self, did, d) -> str:
-        if self.errors.get(did, 0) >= self.cfg["repair"]["max_task_errors"]:
+        """Next step of one dialogue; it errors out after failing on max_task_errors nodes (or 3x that many times anywhere)."""
+        hosts, limit = self.errors.get(did, []), self.cfg["repair"]["max_task_errors"]
+        if len(set(hosts)) >= limit or len(hosts) >= 3 * limit:
             return "error"
         f = Folder(self.out / did)
         plan = f.plan or f.create(d, self.cfg["synth"])
@@ -131,7 +133,7 @@ class Controller:
             if "released" in r:
                 self.log("released.log", r)
             elif not r.get("ok"):
-                self.errors[r["dialogue"]] = self.errors.get(r["dialogue"], 0) + 1
+                self.errors.setdefault(r["dialogue"], []).append(str(r.get("worker", "")).rsplit("-", 2)[0])
                 with open(self.run / "errors.log", "a") as log:
                     log.write(json.dumps(r) + "\n")
         write_json(self.run / "errors.json", self.errors)
