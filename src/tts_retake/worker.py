@@ -71,15 +71,20 @@ class Worker:
         self.info, self.cfg = info, call(info, "/config")
         memory = gpu_memory_gb() if kind == "gpu" else None
         self.kind = "cpu" if memory is not None and memory < self.cfg["scheduler"]["min_gpu_gb"] else kind
+        self.one_engine = self.kind == "gpu" and memory is not None and memory < self.cfg["synth"]["low_vram_below_gb"]
         self.id = f"{socket.gethostname().split('.')[0]}-{os.getpid()}-{uuid.uuid4().hex[:4]}"
         self.engines, self.task = {}, None
         self.handle = os.environ.get("TTS_RETAKE_HANDLE") or os.environ.get("SLURM_JOB_ID", "")
         signal.signal(signal.SIGTERM, self.stop)
 
     def engine(self, kind) -> Engine:
+        """Engine for a task type, started on first use; on a small GPU the other engines are closed first so their models fit."""
         spec = self.cfg["engines"][kind]
         key = (spec["python"], json.dumps(spec["env"], sort_keys=True))
         if key not in self.engines or not self.engines[key].alive():
+            if self.one_engine:
+                for e in self.engines.values():
+                    e.close()
             self.engines[key] = Engine(spec, self.cfg, "cuda" if self.kind == "gpu" else "cpu")
         return self.engines[key]
 
