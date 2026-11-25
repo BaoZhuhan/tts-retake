@@ -141,10 +141,11 @@ class Parakeet:
             from huggingface_hub import hf_hub_download
             path = hf_hub_download(name, name.split("/")[-1] + ".nemo")
         self.model = nemo_asr.models.ASRModel.restore_from(path, map_location=device).eval()
+        self.english_only = "-v3" not in os.path.basename(path)
 
     def words(self, y16, lang):
-        if lang != "en":
-            raise ValueError("Parakeet-TDT checks English only; set check.asr_multilingual for other languages")
+        if lang not in ("en", "fr", "es", "de") or (lang != "en" and self.english_only):
+            raise ValueError(f"{type(self).__name__} cannot check {lang!r}; set check.asr_multilingual to a model that can")
         out = self.model.transcribe([np.ascontiguousarray(y16, dtype=np.float32)], timestamps=True, batch_size=1, verbose=False)
         hyp = (out[0] if isinstance(out, tuple) else out)[0]
         return [[w["word"], round(float(w["start"]), 2), round(float(w["end"]), 2)] for w in hyp.timestamp["word"]]
