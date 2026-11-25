@@ -1,5 +1,5 @@
 """MOSS-TTS (v1.5) synthesis: each turn is cloned from its own speaker's reference, turns of a chunk are generated as one batch
-and joined with the planned pauses."""
+trimmed of edge silence and joined with the planned pauses."""
 from __future__ import annotations
 
 import time
@@ -40,7 +40,16 @@ class SynthTTS:
         with self.torch.no_grad():
             out = self.model.generate(input_ids=batch["input_ids"].to("cuda"), attention_mask=batch["attention_mask"].to("cuda"),
                                       max_new_tokens=int(longest / 2.0 * 12.5 * 2) + 150)
-        return [m.audio_codes_list[0].detach().float().cpu().numpy().reshape(-1) for m in self.proc.decode(out)]
+        return [self.trim(m.audio_codes_list[0].detach().float().cpu().numpy().reshape(-1)) for m in self.proc.decode(out)]
+
+    def trim(self, audio, top_db=40, pad=0.05):
+        import librosa
+
+        if len(audio) < self.sr // 10:
+            return audio
+        _, (a, b) = librosa.effects.trim(audio, top_db=top_db)
+        p = int(pad * self.sr)
+        return audio[max(0, a - p):b + p]
 
     def turns(self, plan, idx):
         lang = plan.get("language", "en")

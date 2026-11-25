@@ -1,4 +1,5 @@
-"""Engine process: loads the synthesis and check models once and runs the tasks its worker sends as JSON lines."""
+"""Engine process: loads the synthesis and check models once and runs the tasks its worker sends as JSON lines; cached GPU memory
+is handed back after each task so the synth and check engines of one GPU worker fit side by side."""
 import importlib
 import json
 import os
@@ -21,6 +22,8 @@ def main():
             result = {"ok": True, **loaded[req["type"]].run(req["folder"])}
         except Exception:
             result = {"ok": False, "error": traceback.format_exc()[-3000:]}
+        if "torch" in sys.modules and sys.modules["torch"].cuda.is_available():
+            sys.modules["torch"].cuda.empty_cache()
         reply.write(json.dumps(result) + "\n")
         reply.flush()
 
