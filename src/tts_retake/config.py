@@ -11,7 +11,7 @@ DEFAULTS = {
               "codec": "OpenMOSS-Team/MOSS-Audio-Tokenizer", "temperature": 1.1, "top_p": 0.9, "top_k": 50,
               "repetition_penalty": 1.1, "attempts": 3, "rate_wpm": [110, 225], "target_wpm": 160,
               "max_chunk_words": 700, "min_chunk_words": 250, "cut_pause": 5.0, "low_vram_below_gb": 30, "batch": 8},
-    "check": {"class": "tts_retake.check:Checker", "asr": "small.en", "asr_multilingual": "large-v3", "speaker_model": "speechbrain/spkrec-ecapa-voxceleb",
+    "check": {"class": "tts_retake.check:Checker", "asr": "small.en", "asr_multilingual": "large-v3-turbo", "speaker_model": "speechbrain/spkrec-ecapa-voxceleb",
               "missing_fail": 0.20, "missing_suspect": 0.10, "added_fail": 0.18, "added_suspect": 0.08,
               "wpm_fail": [95, 225], "wpm_suspect": [110, 195], "silence_suspect": 6.0, "swap_margin": 0.05,
               "swap_run_cross_gender": 3, "swap_run_same_gender": 4, "drift_own": 0.30, "drift_reference": 0.25,
