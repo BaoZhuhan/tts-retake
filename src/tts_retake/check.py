@@ -136,21 +136,26 @@ class Whisper:
 
 
 class FasterWhisper:
-    def __init__(self, name, device):
+    def __init__(self, name, device, beam=1):
         from faster_whisper import WhisperModel
 
+        self.beam = beam
         self.model = WhisperModel(name, device=device, compute_type="float16" if device == "cuda" else "int8",
                                   cpu_threads=int(os.environ.get("OMP_NUM_THREADS", "4")))
 
     def words(self, y16, lang):
-        segs, _ = self.model.transcribe(np.ascontiguousarray(y16, dtype=np.float32), language=lang, beam_size=1,
+        segs, _ = self.model.transcribe(np.ascontiguousarray(y16, dtype=np.float32), language=lang, beam_size=self.beam,
                                         condition_on_previous_text=False, word_timestamps=True)
         return [[w.word, round(w.start, 2), round(w.end, 2)] for s in segs for w in (s.words or [])]
 
 
 def asr_model(name, device):
-    """ASR backend by model name: "fw:<whisper model>" is Whisper on CTranslate2 (faster-whisper), anything else is openai-whisper."""
-    return FasterWhisper(name[3:], device) if name.startswith("fw:") else Whisper(name, device)
+    """ASR backend by model name: "fw:<whisper model>" is Whisper on CTranslate2 (faster-whisper, greedy), "fw5:<model>" the same
+    with beam 5, anything else is openai-whisper (GPU only in practice: slower than real time on CPU)."""
+    prefix, _, rest = name.partition(":")
+    if rest and prefix in ("fw", "fw5"):
+        return FasterWhisper(rest, device, 5 if prefix == "fw5" else 1)
+    return Whisper(name, device)
 
 
 class Checker:
@@ -197,7 +202,7 @@ class Checker:
 
     def transcribe(self, f, k, y16, lang):
         multi = self.cfg["asr_multilingual"]
-        name = self.cfg["asr"] if lang == "en" else multi if isinstance(multi, str) else multi.get(lang, "large-v3")
+        name = self.cfg["asr"] if lang == "en" else multi if isinstance(multi, str) else multi.get(lang, "fw:large-v3")
         cached = read_json(f.chunk(k, "words.json"))
         if cached and cached.get("sig") == f.sig(k) and cached.get("asr") == name:
             return cached["words"]
