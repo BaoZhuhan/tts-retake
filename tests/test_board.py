@@ -27,5 +27,19 @@ class RetryElsewhereTest(unittest.TestCase):
         self.assertEqual(board.claim(a)["task"]["dialogue"], "d1")
 
 
+class GroupClaimTest(unittest.TestCase):
+    def test_gpu_worker_can_claim_only_synth(self):
+        board = Board(DEFAULTS)
+        g = {"id": "g", "kind": "gpu"}
+        board.put("c1", "check", 0)
+        board.put("s1", "synth", 0)
+        board.put("s2", "synth", 0)
+        self.assertEqual(board.claim(g)["task"]["dialogue"], "s1")
+        self.assertEqual(board.claim(g, ["synth"])["task"]["dialogue"], "s2")
+        self.assertIn("wait", board.claim(g, ["synth"]))
+        board.release("g", "test")
+        self.assertEqual(board.snapshot()["queued"], {"synth": 2, "check": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

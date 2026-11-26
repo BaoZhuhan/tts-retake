@@ -1,5 +1,5 @@
-"""MOSS-TTSD synthesis of the missing chunks of a dialogue folder. With synth.fast the chunks of a dialogue (and their retries) are
-generated together as one batch through FastGen; otherwise one at a time through the model's own generate."""
+"""MOSS-TTSD synthesis of the missing chunks of dialogue folders. With synth.fast the chunks of several dialogues (and their retries)
+are generated together as one batch through FastGen; otherwise one at a time through the model's own generate."""
 from __future__ import annotations
 
 import sys
@@ -72,7 +72,7 @@ class Synth:
         except self.torch.cuda.OutOfMemoryError:
             if not self.cfg["fast"] or self.fast.slots == 1:
                 raise
-        self.fast.slots //= 2
+        self.fast.want = max(1, self.fast.slots // 2)
         self.fast.release()
         return self.generate(jobs)
 
@@ -82,11 +82,11 @@ class Synth:
         out = []
         for s in range(0, len(jobs), size):
             part = jobs[s:s + size]
-            convs = [conv for text, prompt, _ in part for conv in self.build(text, self.codes, prompt, self.proc)[0]]
+            convs = [conv for text, prompt, _, codes in part for conv in self.build(text, codes, prompt, self.proc)[0]]
             batch = self.proc(convs, mode="continuation")
             with self.torch.no_grad():
                 res = self.gen(input_ids=batch["input_ids"].to(self.device), attention_mask=batch["attention_mask"].to(self.device),
-                               max_new_tokens=max(self.cap(w) for *_, w in part), **self.decoding)
+                               max_new_tokens=max(self.cap(job[2]) for job in part), **self.decoding)
             out += [m.audio_codes_list[0].detach().float().cpu().numpy().reshape(-1) for m in self.decode(res)]
         return out
 
@@ -122,12 +122,17 @@ class Synth:
             todo = [i for i in todo if i not in good and used[i] < self.cfg["attempts"]]
 
     def run(self, folder) -> dict:
+        return self.run_many([folder])[0]
+
+    def jobs(self, folder):
+        """(folder, chunk indexes, jobs) for the missing chunks of one dialogue; a job is (text, prompt, words, voice codes) and
+        its prompt starts with the voice of the chunk's first speaker."""
         f = Folder(folder)
         plan = f.plan
         first, second = plan["order"]
         voices = {s: plan["speakers"][s] for s in plan["order"]}
         refs = [self.reference(voices[first]["voice"]), self.reference(voices[second]["voice"])]
-        self.codes = self.proc.encode_audios_from_wav(refs, sampling_rate=self.sr)
+        codes = self.proc.encode_audios_from_wav(refs, sampling_rate=self.sr)
         prompts = {first: (f"[S1] {voices[first]['text']}[S2] {voices[second]['text']}",
                            self.proc.encode_audios_from_wav([self.torch.cat(refs, dim=-1)], sampling_rate=self.sr)[0]),
                    second: (f"[S2] {voices[second]['text']}[S1] {voices[first]['text']}",
@@ -139,12 +144,18 @@ class Synth:
             turns = plan["turns"][a:b]
             body = "".join(f"[S{1 if t['speaker'] == first else 2}] {t['text']} " for t in turns)
             prefix, prompt = prompts[turns[0]["speaker"]]
-            jobs.append((self.norm(self.merge(prefix + body)), prompt, sum(units(t["text"]) for t in turns)))
+            jobs.append((self.norm(self.merge(prefix + body)), prompt, sum(units(t["text"]) for t in turns), codes))
+        return f, todo, jobs
+
+    def run_many(self, folders) -> list:
+        """Missing chunks of several dialogues in one take loop, so short redo lists of many dialogues share FastGen's slots."""
+        work = [self.jobs(folder) for folder in folders]
+        where = [(f, k) for f, todo, _ in work for k in todo]
         started = time.time()
-        for i, (_, audio, attempts, wpm) in self.chunks(jobs):
-            k, seconds = todo[i], round(time.time() - started, 1)
+        for i, (_, audio, attempts, wpm) in self.chunks([job for *_, jobs in work for job in jobs]):
+            (f, k), seconds = where[i], round(time.time() - started, 1)
             tmp = f.path(f".chunk_{k:03d}.tmp.wav")
             self.sf.write(str(tmp), audio, self.sr)
             tmp.replace(f.chunk(k))
             write_json(f.chunk(k, "attempts.json"), {"attempts": attempts, "wpm": wpm, "seconds": seconds})
-        return {"made": todo}
+        return [{"made": todo} for _, todo, _ in work]

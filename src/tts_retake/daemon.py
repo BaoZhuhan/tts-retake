@@ -32,7 +32,7 @@ class Board:
             t = self.tasks.get(dialogue)
             return t and ("working" if t["worker"] else "queued")
 
-    def claim(self, worker):
+    def claim(self, worker, only=None):
         with self.lock:
             now = time.time()
             self.workers[worker["id"]] = {**self.workers.get(worker["id"], {}), **worker, "seen": now}
@@ -40,6 +40,7 @@ class Board:
                 self.workers.pop(worker["id"], None)
                 return {"stop": True}
             types = ["synth", "check"] if worker["kind"] == "gpu" else ["check"]
+            types = [k for k in types if not only or k in only]
             live = {k: {w for w, v in self.workers.items() if now - v["seen"] < self.lease and (k == "check" or v["kind"] == "gpu")}
                     for k in types}
             free = [t for t in self.tasks.values() if t["worker"] is None and t["type"] in types
@@ -120,7 +121,7 @@ class Board:
 class Daemon:
     def __init__(self, board, cfg, run_dir):
         token = secrets.token_hex(16)
-        routes = {"/claim": lambda b: board.claim(b["worker"]), "/beat": lambda b: board.beat(b["worker"], b.get("dialogue")),
+        routes = {"/claim": lambda b: board.claim(b["worker"], b.get("only")), "/beat": lambda b: board.beat(b["worker"], b.get("dialogue")),
                   "/done": lambda b: board.done(b["worker"], b["dialogue"], b["result"]), "/config": lambda b: cfg,
                   "/release": lambda b: board.release(b["worker"], b.get("reason", "released")),
                   "/status": lambda b: board.snapshot()}

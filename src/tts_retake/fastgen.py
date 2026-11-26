@@ -39,20 +39,24 @@ class FastGen:
         self.kvh, self.hd = lc.num_key_value_heads, getattr(lc, "head_dim", None) or lc.hidden_size // lc.num_attention_heads
         self.audio_w = torch.cat([h.weight for h in model.lm_heads[1:]]).detach()
         self.find = sys.modules[type(model).__module__].find_last_equal_C
-        self.slots, self.bucket, self.every = slots, bucket, check_every
+        self.want, self.slots, self.bucket, self.every = slots, slots, bucket, check_every
         self.key, self.s, self.graphs = None, None, {}
 
     def release(self):
         self.key, self.s, self.graphs = None, None, {}
         torch.cuda.empty_cache()
 
-    def state(self, cap, opts):
-        """Static buffers for self.slots rows of cap positions; kept while later calls fit."""
+    def state(self, cap, opts, reserve_gb=4):
+        """Static buffers for up to self.want rows of cap positions, as many as free GPU memory holds after reserve_gb for
+        prefill, graph pools and activations; kept while later calls fit."""
         if self.key and cap <= self.key[0] and opts == self.key[1]:
             return
         cap = max(cap, self.key[0]) if self.key else cap
         self.release()
-        B, d, n = self.slots, self.audio_w.device, self.n_vq
+        n, d = self.n_vq, self.audio_w.device
+        row = 2 * len(self.lm.layers) * self.kvh * cap * self.hd * self.audio_w.element_size() + cap * (n + 2) * 8 + n * self.V
+        fit = int((torch.cuda.mem_get_info(d)[0] - reserve_gb * 2**30) // row)
+        self.slots = B = max(1, min(self.want, fit))
         kv = lambda: torch.zeros(B, self.kvh, cap, self.hd, dtype=self.audio_w.dtype, device=d)
         z = lambda *shape, dtype=torch.long: torch.zeros(*shape, dtype=dtype, device=d)
         self.s = {"K": [kv() for _ in self.lm.layers], "Vv": [kv() for _ in self.lm.layers],

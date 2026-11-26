@@ -48,7 +48,7 @@ class SynthTTS:
                 raise
         self.torch.cuda.empty_cache()
         if self.cfg["fast"]:
-            self.fast.slots //= 2
+            self.fast.want = max(1, self.fast.slots // 2)
             self.fast.release()
             return self.generate(items)
         h = len(items) // 2
