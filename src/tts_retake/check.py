@@ -196,7 +196,8 @@ class Checker:
         return z["emb"], float(z["f0"]) or None
 
     def transcribe(self, f, k, y16, lang):
-        name = self.cfg["asr"] if lang == "en" else self.cfg["asr_multilingual"]
+        multi = self.cfg["asr_multilingual"]
+        name = self.cfg["asr"] if lang == "en" else multi if isinstance(multi, str) else multi.get(lang, "large-v3")
         cached = read_json(f.chunk(k, "words.json"))
         if cached and cached.get("sig") == f.sig(k) and cached.get("asr") == name:
             return cached["words"]

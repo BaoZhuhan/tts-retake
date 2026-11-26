@@ -28,7 +28,8 @@ pip install -e .
 
 The controller needs Python 3.11 and nothing else. Synthesis needs an environment with MOSS-TTSD and the `clis/` folder of the
 [MOSS-TTS repository](https://github.com/OpenMOSS/MOSS-TTS); checks need `speechbrain`, `librosa`, `faster-whisper` (English default `asr = "fw:small.en"`, fast enough for CPU workers) and
-`openai-whisper` (other languages, `asr_multilingual = "large-v3"`); `fw:` picks faster-whisper for any Whisper model. Each can live in its own
+`openai-whisper`; `fw:` picks faster-whisper for any Whisper model. Other languages use `check.asr_multilingual`, one model for
+all or one per language (by default faster-whisper large-v3 for de and es, openai-whisper large-v3 for fr and zh, from a bake-off). Each can live in its own
 environment; the cluster file says which Python runs which step.
 
 ## Input
