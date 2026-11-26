@@ -26,7 +26,7 @@ class SynthTTS:
         self.gen = self.model.generate
         if c["fast"]:
             from .fastgen import FastGen
-            self.fast = FastGen(self.model)
+            self.fast = FastGen(self.model, slots=c["batch"])
             self.gen = self.fast.generate
         self.sr = int(self.proc.model_config.sampling_rate)
         self.codes = {}
@@ -39,16 +39,18 @@ class SynthTTS:
         return self.codes[path]
 
     def generate(self, items):
-        """Audio for each (text, voice, language, tokens) item; a batch that runs out of GPU memory is split in half and retried
-        outside the except block, so the failed batch's tensors are freed first."""
+        """Audio for each (text, voice, language, tokens) item. On running out of GPU memory, FastGen halves its slots and a plain
+        batch is split in half; the retry runs outside the except block, so the failed batch's tensors are freed first."""
         try:
             return self.batch(items)
         except self.torch.cuda.OutOfMemoryError:
-            if len(items) == 1:
+            if (self.fast.slots if self.cfg["fast"] else len(items)) == 1:
                 raise
-        if self.cfg["fast"]:
-            self.fast.release()
         self.torch.cuda.empty_cache()
+        if self.cfg["fast"]:
+            self.fast.slots //= 2
+            self.fast.release()
+            return self.generate(items)
         h = len(items) // 2
         return self.generate(items[:h]) + self.generate(items[h:])
 
@@ -77,22 +79,26 @@ class SynthTTS:
         return max(6, round(units(text) * LANGS[lang][1] / self.cfg["target_wpm"] * 60 * 12.5))
 
     def turns(self, plan, idx):
+        """Best take of each turn: closest to target_wpm, retried while out of rate_wpm, up to synth.attempts takes. With
+        FastGen, slots left idle by a short todo list hold extra takes of the same turns."""
         lang = plan.get("language", "en")
         name, low, high = LANGS[lang][0], *self.cfg["rate_wpm"]
-        best, todo = {}, list(idx)
-        for attempt in range(1, self.cfg["attempts"] + 1):
-            for s in range(0, len(todo), self.cfg["batch"]):
-                part = todo[s:s + self.cfg["batch"]]
+        best, todo, used = {}, list(idx), dict.fromkeys(idx, 0)
+        while todo:
+            n = max(1, self.fast.slots // len(todo)) if self.cfg["fast"] else 1
+            batch = [i for i in todo for _ in range(min(n, self.cfg["attempts"] - used[i]))]
+            size = len(batch) if self.cfg["fast"] else self.cfg["batch"]
+            for s in range(0, len(batch), size):
+                part = batch[s:s + size]
                 items = [(plan["turns"][i]["text"], plan["speakers"][plan["turns"][i]["speaker"]]["voice"], name, self.tokens(plan["turns"][i]["text"], lang))
                          for i in part]
                 for i, audio in zip(part, self.generate(items)):
+                    used[i] += 1
                     rate = wpm(units(plan["turns"][i]["text"]), len(audio) / self.sr, lang)
                     score = abs(rate - self.cfg["target_wpm"])
                     if i not in best or score < best[i][0]:
-                        best[i] = (score, audio, attempt, round(rate, 1))
-            todo = [i for i in todo if not low <= best[i][3] <= high]
-            if not todo:
-                break
+                        best[i] = (score, audio, used[i], round(rate, 1))
+            todo = [i for i in todo if not low <= best[i][3] <= high and used[i] < self.cfg["attempts"]]
         return best
 
     def run(self, folder) -> dict:

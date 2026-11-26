@@ -37,7 +37,7 @@ class Synth:
         self.gen = self.model.generate
         if c["fast"]:
             from .fastgen import FastGen
-            self.fast = FastGen(self.model)
+            self.fast = FastGen(self.model, slots=c["batch"])
             self.gen = self.fast.generate
         self.decoding = {"audio_temperature": c["temperature"], "audio_top_p": c["top_p"], "audio_top_k": c["top_k"],
                          "audio_repetition_penalty": c["repetition_penalty"]}
@@ -63,8 +63,8 @@ class Synth:
         return self.ta.functional.resample(wav, rate, self.sr)
 
     def generate(self, jobs):
-        """Audio for each (text, prompt, words) job, cut in batches of synth.batch (1 without synth.fast)."""
-        size = self.cfg["batch"] if self.cfg["fast"] else 1
+        """Audio for each (text, prompt, words) job: all at once through FastGen's slots, or one at a time without synth.fast."""
+        size = len(jobs) if self.cfg["fast"] else 1
         out = []
         for s in range(0, len(jobs), size):
             part = jobs[s:s + size]
@@ -80,26 +80,32 @@ class Synth:
     def cap(words):
         return int(words / 2.5 * 12.5 * 1.8) + 300
 
+    def copies(self, todo, used):
+        """Takes per job this round: idle FastGen slots go to extra takes of the same jobs (free while decoding is
+        memory-bound), so a retry round is rarely needed."""
+        n = max(1, self.fast.slots // len(todo)) if self.cfg["fast"] else 1
+        return [i for i in todo for _ in range(min(n, self.cfg["attempts"] - used[i]))]
+
     def chunks(self, jobs):
         """Yields (job index, best take) as each job settles: in the rate window and not cut at the cap, or out of attempts."""
         low, high = self.cfg["rate_wpm"]
-        best, todo = {}, list(range(len(jobs)))
-        for attempt in range(1, self.cfg["attempts"] + 1):
-            for i, audio in zip(todo, self.generate([jobs[i] for i in todo])):
+        best, used, todo = {}, dict.fromkeys(range(len(jobs)), 0), list(range(len(jobs)))
+        while todo:
+            batch = self.copies(todo, used)
+            for i, audio in zip(batch, self.generate([jobs[i] for i in batch])):
+                used[i] += 1
                 words = jobs[i][2]
                 seconds = len(audio) / self.sr
                 wpm = words / max(seconds, 1e-6) * 60
                 capped = seconds >= (self.cap(words) - 300) / 12.5 * 0.98
                 score = abs(wpm - self.cfg["target_wpm"]) + (1000 if capped else 0)
                 if i not in best or score < best[i][0]:
-                    best[i] = (score, audio, attempt, round(wpm, 1), capped)
-            last = attempt == self.cfg["attempts"]
+                    best[i] = (score, audio, used[i], round(wpm, 1), capped)
+            good = {i for i in todo if low <= best[i][3] <= high and not best[i][4]}
             for i in todo:
-                if last or (low <= best[i][3] <= high and not best[i][4]):
+                if i in good or used[i] >= self.cfg["attempts"]:
                     yield i, best[i][:4]
-            todo = [i for i in todo if not (low <= best[i][3] <= high and not best[i][4])]
-            if not todo:
-                break
+            todo = [i for i in todo if i not in good and used[i] < self.cfg["attempts"]]
 
     def run(self, folder) -> dict:
         f = Folder(folder)
