@@ -177,9 +177,10 @@ class FastGen:
 
     @torch.inference_mode()
     def many(self, prompts, max_new_tokens, text_temperature=1.5, text_top_p=1.0, text_top_k=50, audio_temperature=1.7,
-             audio_top_p=0.8, audio_top_k=25, audio_repetition_penalty=1.0):
+             audio_top_p=0.8, audio_top_k=25, audio_repetition_penalty=1.0, retake=None):
         """Generate for each unpadded prompt [S, 1 + n_vq] (max_new_tokens: one int, or one per prompt). Returns, per prompt,
-        the prompt followed by its generated frames."""
+        the prompt followed by its generated frames. retake(j, frames, capped), called as prompt j finishes, may ask for
+        another take of it: the prompt is appended to prompts (in place) and queued, so retakes fill freed slots at once."""
         news = [max_new_tokens] * len(prompts) if isinstance(max_new_tokens, int) else list(max_new_tokens)
         e, b = self.every, self.bucket
         self.state(-(-(max(len(p) + m for p, m in zip(prompts, news)) + e + 1) // b) * b,
@@ -207,6 +208,11 @@ class FastGen:
                     done[j] = torch.cat([prompts[j], s["out"][slot, :steps]])
                     del live[slot]
                     s["stop"][slot] = True
+                    frames = int((s["out"][slot, :steps, 0] == self.c.audio_assistant_gen_slot_token_id).sum())
+                    if retake and retake(j, frames, first[slot] == BIG):
+                        prompts.append(prompts[j])
+                        news.append(news[j])
+                        queue.append(len(prompts) - 1)
         return [done[j] for j in range(len(prompts))]
 
     def generate(self, input_ids, attention_mask=None, max_new_tokens=1000, **kw):
@@ -215,7 +221,7 @@ class FastGen:
             attention_mask = torch.ones(input_ids.shape[:2], dtype=torch.bool, device=input_ids.device)
         prompts = [x[m.bool()] for x, m in zip(input_ids, attention_mask)]
         out = []
-        for p, g in zip(prompts, self.many(prompts, max_new_tokens, **kw)):
+        for p, g in zip(prompts, self.many(prompts, max_new_tokens, **kw)):  # prompts grows with retakes
             i = int(self.find(p[None, :, 0], self.c.im_start_token_id)[0]) + 3
             out.append((torch.tensor(len(p) - i, device=p.device), g[i:]))
         return out

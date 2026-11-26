@@ -38,7 +38,6 @@ class Synth:
         if c["fast"]:
             from .fastgen import FastGen
             self.fast = FastGen(self.model, slots=c["batch"])
-            self.gen = self.fast.generate
         self.decoding = {"audio_temperature": c["temperature"], "audio_top_p": c["top_p"], "audio_top_k": c["top_k"],
                          "audio_repetition_penalty": c["repetition_penalty"]}
 
@@ -64,57 +63,94 @@ class Synth:
         wav = self.torch.from_numpy(wav.T.copy()).mean(0, keepdim=True)
         return self.ta.functional.resample(wav, rate, self.sr)
 
-    def generate(self, jobs):
-        """Audio for each (text, prompt, words) job. With FastGen, running out of GPU memory halves its slots and retries (outside
-        the except block, so the failed attempt's tensors are freed first)."""
+    def generate(self, fn, jobs):
+        """fn(jobs) with FastGen's slots halved and retried on running out of GPU memory (outside the except block, so the
+        failed attempt's tensors are freed first)."""
         try:
-            return self.batch(jobs)
+            return fn(jobs)
         except self.torch.cuda.OutOfMemoryError:
             if not self.cfg["fast"] or self.fast.slots == 1:
                 raise
         self.fast.want = max(1, self.fast.slots // 2)
         self.fast.release()
-        return self.generate(jobs)
+        return self.generate(fn, jobs)
+
+    def inputs(self, jobs):
+        convs = [conv for text, prompt, _, codes in jobs for conv in self.build(text, codes, prompt, self.proc)[0]]
+        batch = self.proc(convs, mode="continuation")
+        return {"input_ids": batch["input_ids"].to(self.device), "attention_mask": batch["attention_mask"].to(self.device)}
 
     def batch(self, jobs):
-        """All jobs at once through FastGen's slots, or one at a time without synth.fast."""
-        size = len(jobs) if self.cfg["fast"] else 1
+        """Audio for each (text, prompt, words, codes) job, one at a time through the model's own generate."""
         out = []
-        for s in range(0, len(jobs), size):
-            part = jobs[s:s + size]
-            convs = [conv for text, prompt, _, codes in part for conv in self.build(text, codes, prompt, self.proc)[0]]
-            batch = self.proc(convs, mode="continuation")
+        for job in jobs:
             with self.torch.no_grad():
-                res = self.gen(input_ids=batch["input_ids"].to(self.device), attention_mask=batch["attention_mask"].to(self.device),
-                               max_new_tokens=max(self.cap(job[2]) for job in part), **self.decoding)
-            out += [m.audio_codes_list[0].detach().float().cpu().numpy().reshape(-1) for m in self.decode(res)]
+                res = self.gen(**self.inputs([job]), max_new_tokens=self.cap(job[2]), **self.decoding)
+            out += self.audio(res)
         return out
+
+    def audio(self, res):
+        return [m.audio_codes_list[0].detach().float().cpu().numpy().reshape(-1) for m in self.decode(res)]
+
+    def streamed(self, jobs):
+        """Best take per job through FastGen in one call: takes are judged by frame count as they finish and a retake goes
+        straight into the freed slot (unless another take of that job is still running), so no round waits for its slowest
+        take and only each job's best take is decoded. Idle slots start with extra takes of the same jobs. Returns (audio, takes)
+        per job."""
+        low, high = self.cfg["rate_wpm"]
+        n, extra = divmod(self.fast.slots, len(jobs))
+        order = [i for i in range(len(jobs)) for _ in range(min(max(1, n + (i < extra)), self.cfg["attempts"]))]
+        issued, flying, best = dict.fromkeys(range(len(jobs)), 0), dict.fromkeys(range(len(jobs)), 0), {}
+        for i in order:
+            issued[i] += 1
+            flying[i] += 1
+
+        def retake(p, frames, capped):
+            i = order[p]
+            flying[i] -= 1
+            wpm = jobs[i][2] / max(frames / 12.5, 1e-6) * 60
+            score = abs(wpm - self.cfg["target_wpm"]) + (1000 if capped else 0)
+            if i not in best or score < best[i][0]:
+                best[i] = (score, p, wpm, capped)
+            if (low <= best[i][2] <= high and not best[i][3]) or flying[i] or issued[i] >= self.cfg["attempts"]:
+                return False
+            order.append(i)
+            issued[i] += 1
+            flying[i] += 1
+            return True
+
+        takes = [jobs[i] for i in order]
+        res = self.fast.generate(**self.inputs(takes), max_new_tokens=[self.cap(job[2]) for job in takes], retake=retake,
+                                 **self.decoding)
+        return [(a, issued[i]) for i, a in enumerate(self.audio([res[best[i][1]] for i in range(len(jobs))]))]
 
     @staticmethod
     def cap(words):
         return int(words / 2.5 * 12.5 * 1.8) + 300
 
-    def copies(self, todo, used):
-        """Takes per job this round: idle FastGen slots go to extra takes of the same jobs (free while decoding is
-        memory-bound), so a retry round is rarely needed."""
-        n = max(1, self.fast.slots // len(todo)) if self.cfg["fast"] else 1
-        return [i for i in todo for _ in range(min(n, self.cfg["attempts"] - used[i]))]
-
     def chunks(self, jobs):
-        """Yields (job index, best take) as each job settles: in the rate window and not cut at the cap, or out of attempts."""
+        """Yields (job index, (score, audio, takes, wpm)) as each job settles: in the rate window and not cut at the cap, or
+        out of attempts."""
         low, high = self.cfg["rate_wpm"]
+
+        def judge(i, audio):
+            seconds = len(audio) / self.sr
+            wpm = jobs[i][2] / max(seconds, 1e-6) * 60
+            capped = seconds >= (self.cap(jobs[i][2]) - 300) / 12.5 * 0.98
+            return abs(wpm - self.cfg["target_wpm"]) + (1000 if capped else 0), round(wpm, 1), capped
+
+        if self.cfg["fast"]:
+            for i, (audio, takes) in enumerate(self.generate(self.streamed, jobs)):
+                score, wpm, _ = judge(i, audio)
+                yield i, (score, audio, takes, wpm)
+            return
         best, used, todo = {}, dict.fromkeys(range(len(jobs)), 0), list(range(len(jobs)))
         while todo:
-            batch = self.copies(todo, used)
-            for i, audio in zip(batch, self.generate([jobs[i] for i in batch])):
+            for i, audio in zip(todo, self.generate(self.batch, [jobs[i] for i in todo])):
                 used[i] += 1
-                words = jobs[i][2]
-                seconds = len(audio) / self.sr
-                wpm = words / max(seconds, 1e-6) * 60
-                capped = seconds >= (self.cap(words) - 300) / 12.5 * 0.98
-                score = abs(wpm - self.cfg["target_wpm"]) + (1000 if capped else 0)
+                score, wpm, capped = judge(i, audio)
                 if i not in best or score < best[i][0]:
-                    best[i] = (score, audio, used[i], round(wpm, 1), capped)
+                    best[i] = (score, audio, used[i], wpm, capped)
             good = {i for i in todo if low <= best[i][3] <= high and not best[i][4]}
             for i in todo:
                 if i in good or used[i] >= self.cfg["attempts"]:

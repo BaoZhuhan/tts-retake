@@ -85,8 +85,8 @@ class SynthTTS:
         name, low, high = LANGS[lang][0], *self.cfg["rate_wpm"]
         best, todo, used = {}, list(idx), dict.fromkeys(idx, 0)
         while todo:
-            n = max(1, self.fast.slots // len(todo)) if self.cfg["fast"] else 1
-            batch = [i for i in todo for _ in range(min(n, self.cfg["attempts"] - used[i]))]
+            n, extra = divmod(self.fast.slots, len(todo)) if self.cfg["fast"] else (1, 0)
+            batch = [i for p, i in enumerate(todo) for _ in range(min(max(1, n + (p < extra)), self.cfg["attempts"] - used[i]))]
             size = len(batch) if self.cfg["fast"] else self.cfg["batch"]
             for s in range(0, len(batch), size):
                 part = batch[s:s + size]
