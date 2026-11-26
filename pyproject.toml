@@ -13,8 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 synth = ["torch", "torchaudio", "transformers", "soundfile", "numpy"]
-check = ["torch", "openai-whisper", "speechbrain", "librosa", "soundfile", "numpy"]
-parakeet = ["nemo_toolkit[asr]"]
+check = ["torch", "faster-whisper", "openai-whisper", "speechbrain", "librosa", "soundfile", "numpy"]
 
 [project.scripts]
 tts-retake = "tts_retake.cli:main"
