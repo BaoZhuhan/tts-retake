@@ -1,5 +1,5 @@
 """MOSS-TTS (v1.5) synthesis: each turn is cloned from its own speaker's reference with a duration hint for target_wpm; turns of a
-chunk are generated as one batch, trimmed of edge silence and joined with the planned pauses."""
+chunk are generated as one batch (through FastGen with synth.fast), trimmed of edge silence and joined with the planned pauses."""
 from __future__ import annotations
 
 import time
@@ -23,6 +23,11 @@ class SynthTTS:
         self.proc.audio_tokenizer = self.proc.audio_tokenizer.to("cuda")
         self.model = AutoModel.from_pretrained(c["model"], trust_remote_code=True, attn_implementation="sdpa",
                                                dtype=torch.bfloat16).to("cuda").eval()
+        self.gen = self.model.generate
+        if c["fast"]:
+            from .fastgen import FastGen
+            self.fast = FastGen(self.model)
+            self.gen = self.fast.generate
         self.sr = int(self.proc.model_config.sampling_rate)
         self.codes = {}
 
@@ -41,6 +46,8 @@ class SynthTTS:
         except self.torch.cuda.OutOfMemoryError:
             if len(items) == 1:
                 raise
+        if self.cfg["fast"]:
+            self.fast.release()
         self.torch.cuda.empty_cache()
         h = len(items) // 2
         return self.generate(items[:h]) + self.generate(items[h:])
@@ -50,7 +57,7 @@ class SynthTTS:
         batch = self.proc(convs, mode="generation")
         longest = max(units(t) for t, *_ in items)
         with self.torch.no_grad():
-            out = self.model.generate(input_ids=batch["input_ids"].to("cuda"), attention_mask=batch["attention_mask"].to("cuda"),
+            out = self.gen(input_ids=batch["input_ids"].to("cuda"), attention_mask=batch["attention_mask"].to("cuda"),
                                       max_new_tokens=int(longest / 2.0 * 12.5 * 2) + 150)
         return [self.trim(m.audio_codes_list[0].detach().float().cpu().numpy().reshape(-1)) for m in self.proc.decode(out)]
 

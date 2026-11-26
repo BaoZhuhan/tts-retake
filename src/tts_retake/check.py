@@ -152,7 +152,24 @@ class Parakeet:
         return [[w["word"], round(float(w["start"]), 2), round(float(w["end"]), 2)] for w in hyp.timestamp["word"]]
 
 
+class FasterWhisper:
+    def __init__(self, name, device):
+        from faster_whisper import WhisperModel
+
+        self.model = WhisperModel(name, device=device, compute_type="float16" if device == "cuda" else "int8",
+                                  cpu_threads=int(os.environ.get("OMP_NUM_THREADS", "4")))
+
+    def words(self, y16, lang):
+        segs, _ = self.model.transcribe(np.ascontiguousarray(y16, dtype=np.float32), language=lang, beam_size=1,
+                                        condition_on_previous_text=False, word_timestamps=True)
+        return [[w.word, round(w.start, 2), round(w.end, 2)] for s in segs for w in (s.words or [])]
+
+
 def asr_model(name, device):
+    """ASR backend by model name: "fw:<whisper model>" is Whisper on CTranslate2 (faster-whisper), a Parakeet name is NeMo,
+    anything else is openai-whisper."""
+    if name.startswith("fw:"):
+        return FasterWhisper(name[3:], device)
     return (Parakeet if "parakeet" in name.lower() else Whisper)(name, device)
 
 
