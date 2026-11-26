@@ -1,9 +1,10 @@
-"""Automatic checks of synthesized chunks: ASR fidelity (Whisper or Parakeet), speaking rate, reference leak, tones, silences and ECAPA speaker similarity."""
+"""Automatic checks of synthesized chunks: ASR fidelity (Whisper, on faster-whisper or openai-whisper), speaking rate, reference leak, tones, silences and ECAPA speaker similarity."""
 from __future__ import annotations
 
 import difflib
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -134,24 +135,6 @@ class Whisper:
         return [[w["word"], round(w["start"], 2), round(w["end"], 2)] for s in r["segments"] for w in s.get("words", [])]
 
 
-class Parakeet:
-    def __init__(self, name, device):
-        import nemo.collections.asr as nemo_asr
-
-        path = name
-        if not os.path.exists(path):
-            from huggingface_hub import hf_hub_download
-            path = hf_hub_download(name, name.split("/")[-1] + ".nemo")
-        self.model = nemo_asr.models.ASRModel.restore_from(path, map_location=device).eval()
-
-    def words(self, y16, lang):
-        if lang != "en":
-            raise ValueError("Parakeet-TDT checks English only; set check.asr_multilingual for other languages")
-        out = self.model.transcribe([np.ascontiguousarray(y16, dtype=np.float32)], timestamps=True, batch_size=1, verbose=False)
-        hyp = (out[0] if isinstance(out, tuple) else out)[0]
-        return [[w["word"], round(float(w["start"]), 2), round(float(w["end"]), 2)] for w in hyp.timestamp["word"]]
-
-
 class FasterWhisper:
     def __init__(self, name, device):
         from faster_whisper import WhisperModel
@@ -166,11 +149,8 @@ class FasterWhisper:
 
 
 def asr_model(name, device):
-    """ASR backend by model name: "fw:<whisper model>" is Whisper on CTranslate2 (faster-whisper), a Parakeet name is NeMo,
-    anything else is openai-whisper."""
-    if name.startswith("fw:"):
-        return FasterWhisper(name[3:], device)
-    return (Parakeet if "parakeet" in name.lower() else Whisper)(name, device)
+    """ASR backend by model name: "fw:<whisper model>" is Whisper on CTranslate2 (faster-whisper), anything else is openai-whisper."""
+    return FasterWhisper(name[3:], device) if name.startswith("fw:") else Whisper(name, device)
 
 
 class Checker:
@@ -185,8 +165,10 @@ class Checker:
         self.cache = Path(cfg["job"]["output"]) / ".cache"
         self.asrs = {}
         src = self.cfg["speaker_model"]
-        self.encoder = EncoderClassifier.from_hparams(source=src, savedir=str(self.cache / "speaker_model"), run_opts={"device": self.device},
-                                                      overrides={"pretrained_path": src} if os.path.isdir(src) else {})
+        local = os.path.isdir(src)
+        save = tempfile.mkdtemp(prefix="ecapa-") if local else str(self.cache / "speaker_model")
+        self.encoder = EncoderClassifier.from_hparams(source=src, savedir=save, run_opts={"device": self.device},
+                                                      overrides={"pretrained_path": src} if local else {})
 
     def embed(self, y):
         with self.torch.no_grad():

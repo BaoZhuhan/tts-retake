@@ -76,7 +76,7 @@ def check_config(a):
     problems = len(missing)
     for name, spec in (("worker", cfg["worker"]), *cfg["engines"].items()):
         probe = {"worker": "import tts_retake", "synth": "import torch, torchaudio, soundfile, transformers",
-                 "check": "import torch, speechbrain, librosa, soundfile, " + ("nemo.collections.asr" if "parakeet" in cfg["check"]["asr"].lower() else "faster_whisper" if cfg["check"]["asr"].startswith("fw:") else "whisper")}[name]
+                 "check": "import torch, speechbrain, librosa, soundfile, faster_whisper, whisper"}[name]
         env = {**spec["env"], "PYTHONPATH": ":".join(p for p in (str(Path(__file__).resolve().parents[1]), spec["env"].get("PYTHONPATH", "")) if p)}
         r = subprocess.run([spec["python"], "-c", probe], capture_output=True, text=True, env={**os.environ, **env})
         problems += r.returncode != 0

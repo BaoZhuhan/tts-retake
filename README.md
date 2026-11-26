@@ -4,7 +4,7 @@ Quality-gated two-speaker dialogue synthesis with [MOSS-TTSD](https://github.com
 [MOSS-TTS](https://github.com/OpenMOSS/MOSS-TTS) 1.5. Long dialogues are synthesized in chunks;
 every chunk is checked automatically, and only the chunks that fail are synthesized again.
 
-- **Checks**: Whisper or Parakeet word alignment (missing or added words, dropped opening or ending, reference text read aloud), speaking rate,
+- **Checks**: Whisper word alignment (missing or added words, dropped opening or ending, reference text read aloud), speaking rate,
   sustained tones, long silences, and ECAPA speaker similarity for swapped or drifting voices.
 - **Repair**: a failed chunk is retaken up to 6 times and split in two after 2 retakes; a suspect chunk gets one more take that is kept only
   if it passes; chunks that never pass are listed for human review.
@@ -27,7 +27,8 @@ pip install -e .
 ```
 
 The controller needs Python 3.11 and nothing else. Synthesis needs an environment with MOSS-TTSD and the `clis/` folder of the
-[MOSS-TTS repository](https://github.com/OpenMOSS/MOSS-TTS); checks need `speechbrain`, `librosa` and `openai-whisper` (or NeMo for `asr = "nvidia/parakeet-tdt-0.6b-v2"`). Each can live in its own
+[MOSS-TTS repository](https://github.com/OpenMOSS/MOSS-TTS); checks need `speechbrain`, `librosa`, `faster-whisper` (English default `asr = "fw:small.en"`, fast enough for CPU workers) and
+`openai-whisper` (other languages, `asr_multilingual = "large-v3"`); `fw:` picks faster-whisper for any Whisper model. Each can live in its own
 environment; the cluster file says which Python runs which step.
 
 ## Input
