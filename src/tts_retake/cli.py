@@ -138,3 +138,7 @@ def main(argv=None):
     p.set_defaults(fn=bench)
     a = ap.parse_args(argv)
     return a.fn(a)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
