@@ -43,10 +43,12 @@ class Synth:
                          "audio_repetition_penalty": c["repetition_penalty"]}
 
     def decode(self, out):
-        if not self.low_vram:
-            return self.proc.decode(out)
+        """Codes to audio. FastGen's static buffers are freed first: on long chunks they leave the codec too little memory, and
+        an OOM inside the codec leaves it stuck in streaming mode."""
         if self.cfg["fast"]:
             self.fast.release()
+        if not self.low_vram:
+            return self.proc.decode(out)
         self.model.to("cpu")
         self.torch.cuda.empty_cache()
         self.proc.audio_tokenizer.to("cuda")
@@ -63,7 +65,19 @@ class Synth:
         return self.ta.functional.resample(wav, rate, self.sr)
 
     def generate(self, jobs):
-        """Audio for each (text, prompt, words) job: all at once through FastGen's slots, or one at a time without synth.fast."""
+        """Audio for each (text, prompt, words) job. With FastGen, running out of GPU memory halves its slots and retries (outside
+        the except block, so the failed attempt's tensors are freed first)."""
+        try:
+            return self.batch(jobs)
+        except self.torch.cuda.OutOfMemoryError:
+            if not self.cfg["fast"] or self.fast.slots == 1:
+                raise
+        self.fast.slots //= 2
+        self.fast.release()
+        return self.generate(jobs)
+
+    def batch(self, jobs):
+        """All jobs at once through FastGen's slots, or one at a time without synth.fast."""
         size = len(jobs) if self.cfg["fast"] else 1
         out = []
         for s in range(0, len(jobs), size):
