@@ -13,7 +13,7 @@ DEFAULTS = {
               "max_chunk_words": 700, "min_chunk_words": 250, "cut_pause": 5.0, "low_vram_below_gb": 30, "batch": 8},
     "check": {"class": "tts_retake.check:Checker", "asr": "small.en", "asr_multilingual": "large-v3", "speaker_model": "speechbrain/spkrec-ecapa-voxceleb",
               "missing_fail": 0.20, "missing_suspect": 0.10, "added_fail": 0.18, "added_suspect": 0.08,
-              "wpm_fail": [95, 225], "wpm_suspect": [110, 195], "silence_suspect": 6.0, "swap_margin": 0.05,
+              "wpm_fail": [95, 225], "wpm_suspect": [110, 195], "silence_suspect": 6.0, "lead_speech_fail": 3.0, "swap_margin": 0.05,
               "swap_run_cross_gender": 3, "swap_run_same_gender": 4, "drift_own": 0.30, "drift_reference": 0.25,
               "drift_hard": 0.15, "swap_ref_margin": 0.3, "change_drop": 0.4, "change_min_s": 1.5, "female_f0_min": 145, "male_f0_max": 175, "assemble": True},
     "repair": {"max_redos": 6, "split_after": 2, "chronic_after": 3, "retry_suspect": True, "max_task_errors": 3},

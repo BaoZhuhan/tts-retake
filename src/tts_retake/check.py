@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 
 from .dialogue import Folder, read_json, write_json
-from .language import is_cjk, tokens, wpm
+from .language import LANGS, is_cjk, tokens, wpm
 
-VERSION = 3
+VERSION = 4
 
 def f0_of(y):
     import librosa
@@ -78,6 +78,8 @@ def judge(plan, checks, embeddings, refs, th) -> dict:
         fail += [x for x, bad in (("opening dropped", m["opening_dropped"]), ("ending dropped", m["ending_dropped"])) if bad]
         if len(m["leak"]) >= 2:
             fail.append("reference text spoken: " + " ".join(m["leak"][:5]))
+        if m.get("lead_speech_s", 0) > th["lead_speech_fail"]:
+            fail.append(f"unmatched speech before the script: {m['lead_speech_s']:.0f} s")
         if not th["wpm_fail"][0] <= m["wpm"] <= th["wpm_fail"][1]:
             fail.append(f"speaking rate {m['wpm']:.0f} wpm")
         elif not th["wpm_suspect"][0] <= m["wpm"] <= th["wpm_suspect"][1]:
@@ -269,6 +271,9 @@ class Checker:
         seconds = len(y16) / 16000
         rms = librosa.feature.rms(y=y16, frame_length=1024, hop_length=320)[0]
         db = 20 * np.log10(rms + 1e-9)
+        start = max(0.0, times[blocks[0][1]][0] - 0.25) if blocks else 0.0
+        expected = blocks[0][0] * LANGS[lang][1] * 0.4 if blocks else 0.0
+        lead = max(0.0, float((db[:int(start * 50)] > np.percentile(db, 95) - 30).sum() * 0.02) - expected)
         longest = current = 0
         for quiet in db < max(-50, np.percentile(db, 95) - 45):
             current = current + 1 if quiet else 0
@@ -280,6 +285,7 @@ class Checker:
                    "leak": sorted({hyp[j] for j in leaked}), "trimmed_s": trimmed,
                    "tone_runs": [[round(a, 1), round(b, 1)] for a, b in (runs(sustained_windows(y, sr)) if len(y) > 3 * sr else [])],
                    "longest_silence_s": round(longest * 320 / 16000, 2),
+                   "lead_speech_s": round(lead, 2),
                    "opening_dropped": bool(spoken) and all(r["found"] < 0.3 for r in spoken[:2]),
                    "ending_dropped": bool(spoken) and all(r["found"] < 0.3 for r in spoken[-2:])}
         np.save(f.chunk(k, "emb.npy"), np.array(embeddings) if embeddings else np.zeros((0, 192), dtype=np.float32))
