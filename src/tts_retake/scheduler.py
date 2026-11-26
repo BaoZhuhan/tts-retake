@@ -87,6 +87,8 @@ class Controller:
         return changed
 
     def demand(self) -> dict:
+        """Workers wanted: GPUs for the synthesis backlog within target_minutes; CPU check workers for the checks that running
+        synthesis keeps producing plus the queued ones, with idle GPUs taking the rest."""
         snap = self.board.snapshot()
         est = snap["seconds_per_task"]
         horizon = 60 * self.cfg["scheduler"]["target_minutes"]
@@ -98,8 +100,9 @@ class Controller:
         idle_gpus = sum(w["kind"] == "gpu" and not w.get("task") for w in snap["workers"].values())
         spare = max(0, snap["queued"]["check"] - idle_gpus)
         cap = {"slurm": self.cfg["slurm"]["cpu"]["max_jobs"], "local": self.cfg["local"]["cpu_workers"]}.get(self.cfg["scheduler"]["backend"], spare)
-        cpu = min(spare, math.ceil(spare * est["check_cpu"] / horizon), cap) if cpu_possible and spare else 0
-        cpu = max(cpu, 1 if spare and cpu_possible else 0)
+        stream = snap["running"]["synth"] * est["check_cpu"] / est["synth"]
+        need = math.ceil(stream + spare * est["check_cpu"] / horizon)
+        cpu = min(max(need, 1 if spare else 0), cap) if cpu_possible else 0
         uncovered = max(0.0, spare - cpu * horizon / est["check_cpu"]) if cpu_possible else 0.0
         gpu += min(math.ceil(uncovered), math.ceil(uncovered * est["check_gpu"] / horizon)) if uncovered else 0
         return {"gpu": max(gpu, 1 if synth else 0), "cpu": cpu}
