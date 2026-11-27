@@ -35,8 +35,9 @@ environment; the cluster file says which Python runs which step.
 Optional faster engine: [SGLang-Omni](https://github.com/sgl-project/sglang-omni) at commit `87a11dbe9` with
 `patches/sglang-omni-prompt-rows.patch` applied (adds MOSS-TTSD continuation prompts and per-request sampling, and fixes the
 prompt audio being returned with the output). Set `[synth.sglang] command = "/path/to/sgl-omni"` (plus `config`, a pipeline YAML,
-and `concurrency`); each worker then starts a private server on its GPU. On one H200, MOSS-TTS 1.5 runs at RTF 0.017 against
-FastGen's 0.049 with the same check results.
+and `concurrency`); each worker then starts a private server on its GPU. On one H200, with one take per item and the same checks,
+MOSS-TTS 1.5 runs at RTF 0.017 (concurrency 8) against FastGen's 0.049, and MOSS-TTSD at 0.058 (concurrency 16) against 0.108;
+pass/fail counts match FastGen's within a chunk or two.
 
 ## Input
 
