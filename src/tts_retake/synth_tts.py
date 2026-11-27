@@ -1,6 +1,6 @@
 """MOSS-TTS (v1.5) synthesis: each turn is cloned from its own speaker's reference with a duration hint for target_wpm; turns of a
-chunk are generated as one batch (through FastGen with synth.fast, or as concurrent requests to SGLang-Omni with synth.sglang.command),
-trimmed of edge silence and joined with the planned pauses."""
+chunk are generated as one batch (through FastGen with synth.fast, or as concurrent requests to SGLang-Omni with
+synth.sglang.command on GPUs of at least synth.sglang.min_gb), trimmed of edge silence and joined with the planned pauses."""
 from __future__ import annotations
 
 import time
@@ -20,7 +20,7 @@ class SynthTTS:
         c = self.cfg = cfg["synth"]
         self.sf, self.torch = soundfile, torch
         self.server, self.codes = None, {}
-        if c["sglang"]["command"]:
+        if c["sglang"]["command"] and torch.cuda.get_device_properties(0).total_memory / 2**30 >= c["sglang"]["min_gb"]:
             from .sglang import Server
             self.server, self.sr = Server(cfg, c["model"]), None
             return

@@ -1,0 +1,22 @@
+# SGLang-Omni pipeline for MOSS models on 32 GB GPUs (sgl-omni --model-path overrides model_path): 8 requests, room for codec decode.
+config_cls: MossTTSSingleProcessPipelineConfig
+model_path: OpenMOSS-Team/MOSS-TTS-v1.5
+
+stages:
+  preprocessing:
+    factory:
+      device: cpu
+      compute_dtype: bfloat16
+      max_concurrency: 4
+
+  tts_engine:
+    engine:
+      max_running_requests: 8
+      mem_fraction_static: 0.58
+      cuda_graph_max_bs: 8
+
+  vocoder:
+    factory:
+      dtype: bfloat16
+      max_batch_size: 4
+      max_batch_wait_ms: 2

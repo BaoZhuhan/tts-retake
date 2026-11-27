@@ -1,6 +1,7 @@
 """MOSS-TTSD synthesis of the missing chunks of dialogue folders. With synth.fast the chunks of several dialogues (and their retries)
-are generated together as one batch through FastGen; with synth.sglang.command they are concurrent requests to SGLang-Omni (the same
-continuation prompts, built here); otherwise one at a time through the model's own generate."""
+are generated together as one batch through FastGen; with synth.sglang.command, on GPUs of at least synth.sglang.ttsd_min_gb,
+they are concurrent requests to SGLang-Omni (the same continuation prompts, built here; on 32 GB cards its KV cache holds too
+few requests to beat FastGen); otherwise one at a time through the model's own generate."""
 from __future__ import annotations
 
 import sys
@@ -26,7 +27,7 @@ class Synth:
         self.decoding = {"audio_temperature": c["temperature"], "audio_top_p": c["top_p"], "audio_top_k": c["top_k"],
                          "audio_repetition_penalty": c["repetition_penalty"]}
         self.server = None
-        if c["sglang"]["command"]:
+        if c["sglang"]["command"] and torch.cuda.get_device_properties(0).total_memory / 2**30 >= c["sglang"]["ttsd_min_gb"]:
             from transformers import AutoProcessor
 
             from .sglang import Server

@@ -34,10 +34,17 @@ environment; the cluster file says which Python runs which step.
 
 Optional faster engine: [SGLang-Omni](https://github.com/sgl-project/sglang-omni) at commit `87a11dbe9` with
 `patches/sglang-omni-prompt-rows.patch` applied (adds MOSS-TTSD continuation prompts and per-request sampling, and fixes the
-prompt audio being returned with the output). Set `[synth.sglang] command = "/path/to/sgl-omni"` (plus `config`, a pipeline YAML,
-and `concurrency`); each worker then starts a private server on its GPU. On one H200, with one take per item and the same checks,
-MOSS-TTS 1.5 runs at RTF 0.017 (concurrency 8) against FastGen's 0.049, and MOSS-TTSD at 0.058 (concurrency 16) against 0.108;
-pass/fail counts match FastGen's within a chunk or two.
+prompt audio being returned with the output). Set `[synth.sglang] command = "/path/to/sgl-omni"`, `config` (a pipeline YAML;
+`configs/sglang/moss_32gb.yaml` fits 32-48 GB cards) and `concurrency`; each worker then starts a private server on its GPU.
+It is used only where it beats FastGen: MOSS-TTS 1.5 on GPUs of at least `min_gb` (30), MOSS-TTSD of at least `ttsd_min_gb`
+(80); elsewhere FastGen runs. One take per item, same checks:
+
+| GPU | Model | FastGen RTF | SGLang RTF | Checks (pass/suspect/fail, SGLang vs FastGen) |
+|---|---|---|---|---|
+| H200 | MOSS-TTS 1.5 | 0.049 | 0.017 | 427/75/110 vs 410/89/113 |
+| H200 | MOSS-TTSD | 0.108 | 0.058 | 12/2/10 vs 12/1/11 |
+| RTX 5000 Ada 32 GB | MOSS-TTS 1.5 | 0.124 | 0.094 | 410/86/116 vs 417/85/110 |
+| RTX 5000 Ada 32 GB | MOSS-TTSD | 0.245 | 0.357 | not used |
 
 ## Input
 
