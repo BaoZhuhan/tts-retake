@@ -1,5 +1,6 @@
 """MOSS-TTS (v1.5) synthesis: each turn is cloned from its own speaker's reference with a duration hint for target_wpm; turns of a
-chunk are generated as one batch (through FastGen with synth.fast), trimmed of edge silence and joined with the planned pauses."""
+chunk are generated as one batch (through FastGen with synth.fast, or as concurrent requests to SGLang-Omni with synth.sglang.command),
+trimmed of edge silence and joined with the planned pauses."""
 from __future__ import annotations
 
 import time
@@ -18,6 +19,11 @@ class SynthTTS:
 
         c = self.cfg = cfg["synth"]
         self.sf, self.torch = soundfile, torch
+        self.server, self.codes = None, {}
+        if c["sglang"]["command"]:
+            from .sglang import Server
+            self.server, self.sr = Server(cfg, c["model"]), None
+            return
         torch.backends.cuda.enable_cudnn_sdp(False)
         self.proc = AutoProcessor.from_pretrained(c["model"], trust_remote_code=True)
         self.proc.audio_tokenizer = self.proc.audio_tokenizer.to("cuda")
@@ -29,7 +35,6 @@ class SynthTTS:
             self.fast = FastGen(self.model, slots=c["batch"])
             self.gen = self.fast.generate
         self.sr = int(self.proc.model_config.sampling_rate)
-        self.codes = {}
 
     def reference(self, path):
         if path not in self.codes:
@@ -38,9 +43,21 @@ class SynthTTS:
             self.codes[path] = self.proc.encode_audios_from_wav([wav], sampling_rate=rate)[0]
         return self.codes[path]
 
+    def slots(self):
+        """Takes generated together: SGLang's concurrency, FastGen's current slots, or 0 for plain batches of synth.batch."""
+        return self.server.slots if self.server else self.fast.slots if self.cfg["fast"] else 0
+
+    def speak(self, item):
+        text, voice, lang, n = item
+        audio, self.sr = self.server.speak({"input": text, "ref_audio": voice, "language": lang, "token_count": n,
+                                            "max_new_tokens": int(units(text) / 2.0 * 12.5 * 2) + 150})
+        return self.trim(audio)
+
     def generate(self, items):
         """Audio for each (text, voice, language, tokens) item. On running out of GPU memory, FastGen halves its slots and a plain
         batch is split in half; the retry runs outside the except block, so the failed batch's tensors are freed first."""
+        if self.server:
+            return list(self.server.pool.map(self.speak, items))
         try:
             return self.batch(items)
         except self.torch.cuda.OutOfMemoryError:
@@ -80,14 +97,15 @@ class SynthTTS:
 
     def turns(self, plan, idx):
         """Best take of each turn: closest to target_wpm, retried while out of rate_wpm, up to synth.attempts takes. With
-        FastGen, slots left idle by a short todo list hold extra takes of the same turns."""
+        FastGen or SGLang, slots left idle by a short todo list hold extra takes of the same turns."""
         lang = plan.get("language", "en")
         name, low, high = LANGS[lang][0], *self.cfg["rate_wpm"]
         best, todo, used = {}, list(idx), dict.fromkeys(idx, 0)
         while todo:
-            n, extra = divmod(self.fast.slots, len(todo)) if self.cfg["fast"] else (1, 0)
+            slots = self.slots()
+            n, extra = divmod(slots, len(todo)) if slots else (1, 0)
             batch = [i for p, i in enumerate(todo) for _ in range(min(max(1, n + (p < extra)), self.cfg["attempts"] - used[i]))]
-            size = len(batch) if self.cfg["fast"] else self.cfg["batch"]
+            size = len(batch) if slots else self.cfg["batch"]
             for s in range(0, len(batch), size):
                 part = batch[s:s + size]
                 items = [(plan["turns"][i]["text"], plan["speakers"][plan["turns"][i]["speaker"]]["voice"], name, self.tokens(plan["turns"][i]["text"], lang))

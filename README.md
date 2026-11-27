@@ -32,6 +32,12 @@ The controller needs Python 3.11 and nothing else. Synthesis needs an environmen
 all or one per language (by default faster-whisper large-v3, beam 5 for zh, from a bake-off, so every language checks on CPU workers). Each can live in its own
 environment; the cluster file says which Python runs which step.
 
+Optional faster engine: [SGLang-Omni](https://github.com/sgl-project/sglang-omni) at commit `87a11dbe9` with
+`patches/sglang-omni-prompt-rows.patch` applied (adds MOSS-TTSD continuation prompts and per-request sampling, and fixes the
+prompt audio being returned with the output). Set `[synth.sglang] command = "/path/to/sgl-omni"` (plus `config`, a pipeline YAML,
+and `concurrency`); each worker then starts a private server on its GPU. On one H200, MOSS-TTS 1.5 runs at RTF 0.017 against
+FastGen's 0.049 with the same check results.
+
 ## Input
 
 One dialogue per line of a JSONL file. Voice paths are relative to the file; `text` is the sentence spoken in the reference clip.

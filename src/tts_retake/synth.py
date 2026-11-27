@@ -1,5 +1,6 @@
 """MOSS-TTSD synthesis of the missing chunks of dialogue folders. With synth.fast the chunks of several dialogues (and their retries)
-are generated together as one batch through FastGen; otherwise one at a time through the model's own generate."""
+are generated together as one batch through FastGen; with synth.sglang.command they are concurrent requests to SGLang-Omni (the same
+continuation prompts, built here); otherwise one at a time through the model's own generate."""
 from __future__ import annotations
 
 import sys
@@ -22,6 +23,19 @@ class Synth:
         self.sf, self.torch, self.ta = soundfile, torch, torchaudio
         self.merge, self.build, self.norm = _merge_consecutive_speaker_tags, build_conversation, normalize_text
         torch.backends.cuda.enable_cudnn_sdp(False)
+        self.decoding = {"audio_temperature": c["temperature"], "audio_top_p": c["top_p"], "audio_top_k": c["top_k"],
+                         "audio_repetition_penalty": c["repetition_penalty"]}
+        self.server = None
+        if c["sglang"]["command"]:
+            from transformers import AutoProcessor
+
+            from .sglang import Server
+            self.server = Server(cfg, c["model"])
+            self.proc = AutoProcessor.from_pretrained(c["model"], trust_remote_code=True, codec_path=c["codec"])
+            self.proc.audio_tokenizer = self.proc.audio_tokenizer.to("cuda").eval()
+            self.device = torch.device("cpu")
+            self.sr = int(getattr(self.proc.model_config, "sampling_rate", 24000))
+            return
         self.low_vram = torch.cuda.get_device_properties(0).total_memory / 2**30 < c["low_vram_below_gb"]
         if self.low_vram:
             from transformers import AutoModel, AutoProcessor
@@ -38,8 +52,6 @@ class Synth:
         if c["fast"]:
             from .fastgen import FastGen
             self.fast = FastGen(self.model, slots=c["batch"])
-        self.decoding = {"audio_temperature": c["temperature"], "audio_top_p": c["top_p"], "audio_top_k": c["top_k"],
-                         "audio_repetition_penalty": c["repetition_penalty"]}
 
     def decode(self, out):
         """Codes to audio. FastGen's static buffers are freed first: on long chunks they leave the codec too little memory, and
@@ -124,6 +136,40 @@ class Synth:
                                  **self.decoding)
         return [(a, issued[i]) for i, a in enumerate(self.audio([res[best[i][1]] for i in range(len(jobs))]))]
 
+    def served(self, jobs, judge):
+        """Takes as concurrent SGLang requests: idle slots start with extra takes of the same jobs, a finished take that leaves its
+        job out of the rate window (or cut at the cap) queues a retake once no other take of that job is in flight, and each job
+        is yielded as it settles."""
+        from concurrent.futures import FIRST_COMPLETED, wait
+
+        low, high = self.cfg["rate_wpm"]
+        grids = [self.inputs([job])["input_ids"][0].tolist() for job in jobs]
+        n, extra = divmod(self.server.slots, len(jobs))
+        issued, best, flying = dict.fromkeys(range(len(jobs)), 0), {}, {}
+
+        def submit(i):
+            issued[i] += 1
+            body = {"input": "-", "prompt_rows": grids[i], "max_new_tokens": self.cap(jobs[i][2]), "moss_sampling": self.decoding}
+            flying[self.server.pool.submit(self.server.speak, body)] = i
+
+        for i in range(len(jobs)):
+            for _ in range(min(max(1, n + (i < extra)), self.cfg["attempts"])):
+                submit(i)
+        while flying:
+            done, _ = wait(flying, return_when=FIRST_COMPLETED)
+            for fut in done:
+                i = flying.pop(fut)
+                audio, _ = fut.result()
+                score, wpm, capped = judge(i, audio)
+                if i not in best or score < best[i][0]:
+                    best[i] = (score, audio, wpm, capped)
+                if i in flying.values():
+                    continue
+                if not (low <= best[i][2] <= high and not best[i][3]) and issued[i] < self.cfg["attempts"]:
+                    submit(i)
+                else:
+                    yield i, (best[i][0], best[i][1], issued[i], best[i][2])
+
     @staticmethod
     def cap(words):
         return int(words / 2.5 * 12.5 * 1.8) + 300
@@ -139,6 +185,9 @@ class Synth:
             capped = seconds >= (self.cap(jobs[i][2]) - 300) / 12.5 * 0.98
             return abs(wpm - self.cfg["target_wpm"]) + (1000 if capped else 0), round(wpm, 1), capped
 
+        if self.server:
+            yield from self.served(jobs, judge)
+            return
         if self.cfg["fast"]:
             for i, (audio, takes) in enumerate(self.generate(self.streamed, jobs)):
                 score, wpm, _ = judge(i, audio)

@@ -1,0 +1,67 @@
+diff --git a/sglang_omni/models/moss_tts/request_builders.py b/sglang_omni/models/moss_tts/request_builders.py
+index b35a992e3..563fe3d61 100644
+--- a/sglang_omni/models/moss_tts/request_builders.py
++++ b/sglang_omni/models/moss_tts/request_builders.py
+@@ -547,9 +547,13 @@ def prepare_moss_tts_request(
+     reference_encoder: MossReferenceEncoder | None = None,
+ ) -> MossTTSPreparedRequest:
+     state = build_moss_tts_state(payload)
+-    message = build_processor_message(processor, state, reference_encoder)
+-    batch = processor([[message]], mode="generation")
+-    input_rows = batch["input_ids"]
++    tts_params = (payload.request.metadata or {}).get("tts_params") or {}
++    if tts_params.get("prompt_rows") is not None:
++        input_rows = torch.tensor(tts_params["prompt_rows"], dtype=torch.long)[None]
++    else:
++        message = build_processor_message(processor, state, reference_encoder)
++        batch = processor([[message]], mode="generation")
++        input_rows = batch["input_ids"]
+     if input_rows.ndim != 3 or int(input_rows.shape[0]) != 1:
+         raise ValueError(
+             "MOSS-TTS processor must return input_ids with shape [1, T, C]"
+@@ -947,7 +951,7 @@ def apply_sglang_moss_tts_result(
+         else:
+             start, end = bounds
+             payload_rows = rows[start:end]
+-            state.assistant_start_length = 0
++            state.assistant_start_length = max(0, int(assistant_prefix_rows.shape[0]) - start) if assistant_prefix_rows.numel() > 0 else 0
+         state.delayed_audio_codes = payload_rows[:, 1:].detach().cpu()
+     else:
+         n_vq = (
+diff --git a/sglang_omni/serve/protocol.py b/sglang_omni/serve/protocol.py
+index d3c844405..42d2f07f3 100644
+--- a/sglang_omni/serve/protocol.py
++++ b/sglang_omni/serve/protocol.py
+@@ -501,6 +501,8 @@ class CreateSpeechRequest(BaseModel):
+     stream_codec_output: bool | None = None
+     suppress_bootstrap_silence: bool | None = None
+     token_count: int | None = None  # MOSS-TTS duration token target
++    prompt_rows: list[list[int]] | None = None  # prebuilt MOSS prompt grid [T, 1 + n_vq] (e.g. MOSS-TTSD continuation)
++    moss_sampling: dict[str, float] | None = None  # per-channel MOSS sampling, e.g. audio_temperature, text_top_k
+     duration_tokens: int | None = None  # alias for token_count
+     initial_codec_chunk_frames: int | None = Field(default=None, ge=0)
+ 
+diff --git a/sglang_omni/serve/speech_service.py b/sglang_omni/serve/speech_service.py
+index b2348cc78..29c4f408c 100644
+--- a/sglang_omni/serve/speech_service.py
++++ b/sglang_omni/serve/speech_service.py
+@@ -97,6 +97,8 @@ class TTSParams(RequiredTTSParams, total=False):
+     prepend_silence: bool
+     condition_buckets: dict[str, int | None]
+     condition_values: dict[str, float | None]
++    prompt_rows: list[list[int]]
++    moss_sampling: dict[str, float]
+ 
+ 
+ SpeechReferenceDescriptor = dict[
+@@ -1218,6 +1220,10 @@ def build_tts_params(
+         tts_params["uploaded_voice_created_at"] = uploaded_voice.voice.created_at
+     else:
+         pass
++    if getattr(request, "prompt_rows", None) is not None:
++        tts_params["prompt_rows"] = request.prompt_rows
++    if getattr(request, "moss_sampling", None):
++        tts_params.update(request.moss_sampling)
+     if request.x_vector_only_mode is not None:
+         tts_params["x_vector_only_mode"] = request.x_vector_only_mode
+     else:
