@@ -76,8 +76,8 @@ class Engine:
 
 
 class Worker:
-    def __init__(self, info, kind):
-        self.info, self.cfg = info, call(info, "/config")
+    def __init__(self, info, kind, only=None):
+        self.info, self.cfg, self.only = info, call(info, "/config"), only
         memory = gpu_memory_gb() if kind == "gpu" else None
         self.kind = "cpu" if memory is not None and memory < self.cfg["scheduler"]["min_gpu_gb"] else kind
         self.one_engine = self.kind == "gpu" and memory is not None and memory < self.cfg["synth"]["low_vram_below_gb"]
@@ -126,7 +126,7 @@ class Worker:
         me = {"id": self.id, "kind": self.kind, "host": socket.gethostname(), "handle": self.handle}
         while time.time() - last_work < 60 * self.cfg["scheduler"]["idle_minutes"] and misses < 40:
             try:
-                reply = call(self.info, "/claim", {"worker": me})
+                reply = call(self.info, "/claim", {"worker": me, "only": self.only})
                 misses = 0
             except OSError:
                 misses += 1
@@ -170,6 +170,6 @@ class Worker:
             e.close()
 
 
-def main(info, kind):
-    Worker(info, kind).loop()
+def main(info, kind, only=None):
+    Worker(info, kind, only).loop()
     sys.exit(0)
