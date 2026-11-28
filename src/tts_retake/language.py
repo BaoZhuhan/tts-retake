@@ -2,8 +2,8 @@
 LANGS maps a code to (name MOSS-TTS expects, English words per unit of the same text), so every rate reads as English words per minute."""
 import re
 
-LANGS = {"en": ("English", 1.0), "zh": ("Chinese", 0.62), "fr": ("French", 0.89), "es": ("Spanish", 0.97), "de": ("German", 0.97)}
-CJK = "㐀-䶿一-鿿豈-﫿"
+LANGS = {"en": ("English", 1.0), "zh": ("Chinese", 0.62), "fr": ("French", 0.89), "es": ("Spanish", 0.97), "de": ("German", 0.97), "ja": ("Japanese", 0.45), "ko": ("Korean", 1.47)}
+CJK = "\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
 TOKEN = re.compile(rf"[{CJK}]|[^\W_{CJK}]+(?:'[^\W_{CJK}]+)*")
 
 
