@@ -38,7 +38,7 @@ def worker(a):
     from .worker import main
 
     info = json.loads(Path(a.daemon).read_text()) if a.daemon else {"url": a.url, "token": a.token}
-    main(info, a.kind, a.only.split(",") if a.only else None)
+    main(info, a.kind, a.only.split(",") if a.only else None, a.set)
 
 
 def status(a):
@@ -121,6 +121,7 @@ def main(argv=None):
     p.add_argument("--token")
     p.add_argument("--kind", choices=["gpu", "cpu"], default="gpu")
     p.add_argument("--only", help="comma-separated task types to take (synth, check); default: all")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=JSON", help="override a config value on this worker, e.g. synth.sglang.concurrency=64")
     p.set_defaults(fn=worker)
     p = sub.add_parser("status", help="progress of a job")
     p.add_argument("job")

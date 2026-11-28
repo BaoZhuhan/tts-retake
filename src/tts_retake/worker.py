@@ -76,8 +76,18 @@ class Engine:
 
 
 class Worker:
-    def __init__(self, info, kind, only=None):
+    def __init__(self, info, kind, only=None, overrides=()):
         self.info, self.cfg, self.only = info, call(info, "/config"), only
+        for o in overrides:
+            key, value = o.split("=", 1)
+            *path, last = key.split(".")
+            d = self.cfg
+            for k in path:
+                d = d[k]
+            try:
+                d[last] = json.loads(value)
+            except ValueError:
+                d[last] = value
         memory = gpu_memory_gb() if kind == "gpu" else None
         self.kind = "cpu" if memory is not None and memory < self.cfg["scheduler"]["min_gpu_gb"] else kind
         self.one_engine = self.kind == "gpu" and memory is not None and memory < self.cfg["synth"]["low_vram_below_gb"]
@@ -170,6 +180,6 @@ class Worker:
             e.close()
 
 
-def main(info, kind, only=None):
-    Worker(info, kind, only).loop()
+def main(info, kind, only=None, overrides=()):
+    Worker(info, kind, only, overrides).loop()
     sys.exit(0)
